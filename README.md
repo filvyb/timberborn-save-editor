@@ -1,32 +1,33 @@
 # Timberborn Save Editor
 
-## Installation
+A fork of [charperbonaroo/timberborn-save-editor](https://github.com/charperbonaroo/timberborn-save-editor), updated for **Timberborn 1.1**. Edit `.timber` and `.json` saves locally in your browser.
 
-Use NodeJS 12.13.1. Other versions are untested. Yes, it's old.
+## Changes in this fork
 
-```sh
-npm i -g yarn
-yarn install
-```
+- Timberborn 1.1 saves, inventories, construction, beavers and voxel maps.
+- Easy, Normal and Hard difficulty presets.
+- Export preserves metadata, thumbnails and unknown save data.
+- React 19, TypeScript, Vite and npm; updated dependencies.
+- Regression tests, browser tests and automatic GitHub Pages deployment.
 
-## Starting
+Keep your original save as a backup. Tested with 1.1.2.4 saves and legacy examples.
 
-```sh
-yarn start
-```
+## Development
 
-## Test / CI
-
-There are no tests, but build needs to succeed.
+Requires **Node.js 22.12+**.
 
 ```sh
-yarn build
+npm ci
+npm start
 ```
-
-## Deploy
-
-Ensure you're on master branch and there are no changes. Then:
 
 ```sh
-yarn deploy
+npm test                         # Includes local saves/ files when present
+npm run build                    # Type-check and build to dist/
+npx playwright install chromium
+npm run test:e2e                  # Browser tests
 ```
+
+## Deployment
+
+Set **Settings → Pages → Source** to **GitHub Actions**. Pushes to the default branch deploy after tests and builds pass on Node 22 and 24.

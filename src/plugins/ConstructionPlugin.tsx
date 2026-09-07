@@ -37,15 +37,12 @@ export const ConstructionPlugin: IEditorPlugin<DemoSave, DemoSave> = {
   write: (_, data) => data,
 
   Preview: ({ saveData }) => {
-    (window as any).__saveData = saveData;
-    console.log(saveData);
     const constructionSites = useMemo(() => ConstructionUtil.getConstructionSites(saveData), [saveData]);
 
     const constructionGroups = useMemo(() => {
       const groups: Record<string, number> = {};
       Object.entries(groupBy(constructionSites, (_) => _.Template)).forEach(([template, sites]) => {
         const type = ConstructionUtil.getBuildingType(template);
-        if (type === "Other") console.log(template);
         groups[type] = (groups[type] || 0) + sites.length;
       });
       return groups;
@@ -63,7 +60,7 @@ export const ConstructionPlugin: IEditorPlugin<DemoSave, DemoSave> = {
     const [constructionSites, setConstructionSites] = useState(() => deepCopy(ConstructionUtil.getConstructionSites(initialData)));
     const buildingData = useMemo<BuildingDataDict>(() =>
       groupBy(constructionSites.map(({ Template, Id, Components }) =>
-        ({ Template, type: ConstructionUtil.getBuildingType(Template), Id, coords: Components.BlockObject.Coordinates, finished: Components.Constructible.Finished } as BuildingData)
+        ({ Template, type: ConstructionUtil.getBuildingType(Template), Id, coords: Components.BlockObject.Coordinates, finished: ConstructionUtil.isFinished({ Id, Template, Components }) } as BuildingData)
       ).sort((a, b) => a.Template.localeCompare(b.Template)), ({ type }) => type) as BuildingDataDict, [constructionSites]
     );
     const sortedAndFiltered = useMemo(() => {
@@ -73,11 +70,11 @@ export const ConstructionPlugin: IEditorPlugin<DemoSave, DemoSave> = {
       let filtered: BuildingData[] | null = null;
       switch (filterColumn) {
         case "type":
-          filtered = buildingData[value];
+          filtered = [...(buildingData[value] ?? [])];
           break;
         case "building":
           const type = ConstructionUtil.getBuildingType(value);
-          filtered = buildingData[type].filter((_) => _.Template === value);
+          filtered = (buildingData[type] ?? []).filter((_) => _.Template === value);
           break;
         default:
           filtered = Object.values(buildingData).flat();
@@ -101,8 +98,8 @@ export const ConstructionPlugin: IEditorPlugin<DemoSave, DemoSave> = {
       setSort({ column, descending: false });
     }, []);
 
-    const finishBuildingConstruction = useCallback((e) => {
-      const itemId: string = e.currentTarget.parentNode.parentNode.id;
+    const finishBuildingConstruction = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+      const itemId: string = e.currentTarget.closest("tr")!.id;
       const newSites = constructionSites.slice();
       const index = newSites.findIndex((_) => _.Id === itemId);
 
@@ -112,7 +109,7 @@ export const ConstructionPlugin: IEditorPlugin<DemoSave, DemoSave> = {
       }
     }, [constructionSites]);
 
-    const finishAll = useCallback((e) => {
+    const finishAll = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
       const newSites = constructionSites.slice();
       for (const info of sortedAndFiltered) {
         const index = newSites.findIndex((_) => _.Id === info.Id);
@@ -124,9 +121,8 @@ export const ConstructionPlugin: IEditorPlugin<DemoSave, DemoSave> = {
     }, [sortedAndFiltered, constructionSites]);
 
     const doSubmit = useCallback(() => {
-      const Entities = initialData.Entities
-        .filter(ConstructionUtil.reverseEntityFilter)
-        .concat(constructionSites);
+      const updates = new Map(constructionSites.map(site => [site.Id, site]));
+      const Entities = initialData.Entities.map(entity => updates.get(entity.Id) ?? entity);
       onSubmit({ ...initialData, Entities });
     }, [onSubmit, constructionSites, initialData]);
 

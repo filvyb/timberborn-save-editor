@@ -1,3 +1,4 @@
+import type { JSX } from "react";
 import { DemoSave } from "./DemoSave";
 
 export interface IEditorPlugin<Input, Output> {

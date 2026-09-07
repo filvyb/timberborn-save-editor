@@ -1,138 +1,60 @@
-import { fromJS, Map } from "immutable";
-import { get } from "lodash";
 import { useState } from "react";
-import { DemoSave } from "../DemoSave";
-import { IEditorPlugin } from "../IEditorPlugin";
+import type { DemoSave } from "../DemoSave";
+import type { IEditorPlugin } from "../IEditorPlugin";
+import { detectDifficultyPreset, difficultyPresets, getPresetValues, type DifficultyPresetId } from "../DifficultyPresets";
+import { getPropertyFields, updateProperties } from "../PropertiesUtil";
 
 type Singletons = DemoSave["Singletons"];
-
-interface InputDef {
-  label: string;
-  path: Array<string|number>;
-  type: "number"|"text";
-  parse: (value: string) => any;
-  step?: string;
-}
-
-interface HeaderDef {
-  label: string;
-  type: "header";
-}
-
-type FieldDefinition = InputDef|HeaderDef;
-
-const parseIntValue = (value: string) => parseInt(value, 10);
-
-const fields: FieldDefinition[] = [{
-  label: "Science",
-  path: ["ScienceService", "SciencePoints"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Cycle & Day",
-  type: "header",
-}, {
-  label: "Cycle",
-  path: ["WeatherService", "Cycle"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Cycle day",
-  path: ["WeatherService", "CycleDay"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Temperate weather duration",
-  path: ["WeatherService", "TemperateWeatherDuration"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Drought duration",
-  path: ["WeatherService", "DroughtDuration"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Weather Duration",
-  type: "header",
-}, {
-  label: "Min temperate weather duration",
-  path: ["WeatherDurationService", "MinTemperateWeatherDuration"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Max temperate weather duration",
-  path: ["WeatherDurationService", "MaxTemperateWeatherDuration"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Min drought duration",
-  path: ["WeatherDurationService", "MinDroughtDuration"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Max drought duration",
-  path: ["WeatherDurationService", "MaxDroughtDuration"],
-  type: "number",
-  parse: parseIntValue,
-}, {
-  label: "Handicap multiplier",
-  path: ["WeatherDurationService", "HandicapMultiplier"],
-  type: "number",
-  parse: parseFloat,
-  step: "0.1",
-}, {
-  label: "Handicap cycles",
-  path: ["WeatherDurationService", "HandicapCycles"],
-  type: "number",
-  parse: parseIntValue,
-}];
-
-
 export const PropertiesPlugin: IEditorPlugin<Singletons, Singletons> = {
-  read: (saveData) => saveData.Singletons,
-  write: (saveData, data) => ({ ...saveData, Singletons: data }),
-  position: 0,
-  id: "PropertiesPlugin",
-  name: "Properties",
-  group: "General",
-  enabled: true,
-  Preview: ({ saveData }) => {
-    return <div className="row">
-      {(fields.filter((_) => _.type !== "header") as InputDef[])
-        .map((_) => <div className="col-4" key={(_.path.join("."))}>{_.label}: <strong>{get(saveData.Singletons, _.path)}</strong></div>)}
-    </div>;
-  },
+  read: (save) => save.Singletons,
+  write: (save, Singletons) => ({ ...save, Singletons }),
+  position: 0, id: "PropertiesPlugin", name: "Properties", group: "General", enabled: true,
+  Preview: ({ saveData }) => <div className="row">
+    {getPropertyFields(saveData.Singletons).slice(0, 5).map(({ label, service, key }) =>
+      <div className="col-md-4" key={`${service}.${key}`}>{label}: <strong>{saveData.Singletons[service][key]}</strong></div>)}
+  </div>,
   Editor: ({ initialData, onClose, onSubmit }) => {
-    const [data, setData] = useState(fromJS(initialData) as Map<string, any>);
-
-    return <form onSubmit={(e) => { e.preventDefault(); onSubmit(data.toJS() as Singletons); }}>
-      <div className="container">
-        <div className="card my-4">
-          <div className="card-body">
-            <h1 className="card-title">Properties</h1>
-            <div className="row">
-              {fields.map((field) => {
-                if (field.type === "header") {
-                  return <h5 key={field.label} className="mb-1 col-12">{field.label}</h5>
-                } else {
-                  const { path, type, parse, label } = field;
-                  const id = path.join(".")
-                  return <div key={id} className="mb-3 col-4">
-                    <label htmlFor={id} className="form-label form-label-sm">{label}</label>
-                    <input id={id} type={type} className="form-control form-control-sm"
-                      value={data.getIn(path) as string} step={field.step}
-                      onInput={(e) => setData(data.setIn(path, parse((e.target as HTMLInputElement).value)))} />
-                  </div>;
-                }
-              })}
-            </div>
-            <div className="d-flex">
-              <button type="submit" className="btn btn-primary">Submit</button>
-              <button type="button" className="btn btn-light ms-auto" onClick={onClose}>Discard changes</button>
-            </div>
-          </div>
-        </div>
+    const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(
+      getPropertyFields(initialData).map(({ service, key }) => [`${service}.${key}`, String(initialData[service][key])])
+    ));
+    const [error, setError] = useState("");
+    const selectedPreset = detectDifficultyPreset(initialData, values);
+    const hasPresetFields = Object.keys(getPresetValues(initialData, "easy")).length > 0;
+    return <form className="container my-4" onSubmit={event => {
+      event.preventDefault();
+      try { onSubmit(updateProperties(initialData, values)); }
+      catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    }}><div className="card"><div className="card-body">
+      <h1>Properties</h1>
+      <div className="mb-4">
+        <label htmlFor="difficulty-preset" className="form-label">Difficulty preset</label>
+        <select id="difficulty-preset" className="form-select" value={selectedPreset} disabled={!hasPresetFields}
+          aria-describedby="difficulty-help" onChange={event => {
+            if (event.target.value === "custom") return;
+            setValues(current => ({ ...current, ...getPresetValues(initialData, event.target.value as DifficultyPresetId) }));
+            setError("");
+          }}>
+          <option value="custom" disabled>Custom</option>
+          {difficultyPresets.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+        </select>
+        <p id="difficulty-help" className="form-text mb-1">
+          {hasPresetFields
+            ? "Sets future weather rules, food and water consumption, injury chance and building refunds for the settings available in this save. Review the fields below, then Submit. Editing these fields can make the preset Custom."
+            : "This legacy save has no settings supported by the Timberborn 1.1 presets."}
+        </p>
+        <p className="form-text">Current season duration, cycle/day, science, population and inventories are kept. Multipliers use 1 for 100%. <a href="https://timberborn.wiki.gg/wiki/Game_Mode#Settings" target="_blank" rel="noreferrer">Game preset values</a></p>
       </div>
-    </form>;
-  }
-}
+      <div className="row">{getPropertyFields(initialData).map(field => {
+        const id = `${field.service}.${field.key}`;
+        return <div key={id} className="col-md-4 mb-3">
+          <label htmlFor={id} className="form-label">{field.label}</label>
+          <input id={id} className="form-control" type="number" required min={field.min} max={field.max} step={field.step}
+            value={values[id]} onChange={event => setValues({ ...values, [id]: event.target.value })} />
+        </div>;
+      })}</div>
+      {error && <p role="alert" className="alert alert-danger">{error}</p>}
+      <div className="d-flex"><button className="btn btn-primary">Submit</button>
+        <button type="button" className="btn btn-light ms-auto" onClick={onClose}>Discard changes</button></div>
+    </div></div></form>;
+  },
+};

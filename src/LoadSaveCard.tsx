@@ -1,116 +1,60 @@
-import JSZip from "jszip";
-import { FormEvent, useCallback, useState } from "react";
-import { deepCopy } from "./deepCopy";
-import { DemoSave } from "./DemoSave";
-
-const exmapleLetsPlay = require("./examples/lets-play-plains.json");
-const exampleIronTeeth = require("./examples/iron-teeth-plains-1-1.json");
+import { useState, type ChangeEvent } from "react";
+import type { DemoSave } from "./DemoSave";
+import { loadSave, parseSave } from "./SaveFile";
 
 export function LoadSaveCard({ onSaveLoaded }: { onSaveLoaded: (save: DemoSave) => void }) {
-  const [error, setError] = useState<unknown>();
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const onInput = useCallback((event: FormEvent<HTMLInputElement>) => {
+  async function onInput(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+    setError("");
+    setLoading(true);
     try {
-      const fileList = (event.target as HTMLInputElement | null)?.files;
-      const file = fileList?.item(0);
-      if (!file) {
-        throw new Error(`Expected file to be uploaded, found none`);
-      }
-
-      const loadJson = (json: string) => {
-        try {
-          const data = JSON.parse(json);
-          data.__originalFilename = file.name;
-          console.log(data);
-          onSaveLoaded(data);
-        } catch (error) {
-          setError(error);
-          throw error;
-        }
-      }
-
-      if (/\.json$/.test(file.name)) {
-        const reader = new FileReader();
-        reader.readAsText(file, "utf-8");
-        reader.onload = (_event) => {
-          loadJson(reader.result as string);
-        }
-      } else if (/\.timber$/.test(file.name)) {
-        new JSZip().loadAsync(file).then((zip) => {
-          const file = Object.values(zip.files)[0];
-          return file.async("string");
-        }).then((json) => {
-          loadJson(json);
-        }).catch((error) => {
-          setError(error);
-          throw error;
-        });
-      }
+      onSaveLoaded(await loadSave(new Uint8Array(await file.arrayBuffer()), file.name));
     } catch (error) {
-      setError(error);
-      throw error;
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+      input.value = "";
     }
-  }, [onSaveLoaded, setError]);
+  }
 
-  const loadExample = useCallback((filename: string, data: DemoSave) => {
-    data.__originalFilename = filename;
-    onSaveLoaded(deepCopy(data));
-  }, [onSaveLoaded]);
+  async function loadExample(kind: "iron-teeth" | "lets-play") {
+    setError("");
+    setLoading(true);
+    try {
+      const url = kind === "iron-teeth"
+        ? new URL("./examples/iron-teeth-plains-1-1.json", import.meta.url)
+        : new URL("./examples/lets-play-plains.json", import.meta.url);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Could not load the example save.");
+      onSaveLoaded(parseSave(await response.text(), `${kind}-legacy.json`));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
 
-  return <div className="container my-4">
-    <div className="row">
-      <div className="col-md-6 offset-md-3">
-        <div className="card">
-          <label className="card-body">
-            <small className="text-danger">A very unofficial &amp; third-party</small>
-            <h1 className="card-title">Timberborn Save Editor</h1>
-            <div className="mb-3 mt-4">
-              <span className="form-label">Upload your save file to start</span>
-              <input type="file" name="save" accept=".json,.timber" onInput={onInput} className="form-control" />
-              {error
-                ? <small className="form-text">{`#{error}`}</small>
-                : <small className="form-text">Default directory: <code>%USERPROFILE%\Documents\Timberborn\Saves\</code></small>}
-            </div>
-            <b>Now works with <code>.timber</code> files!</b>
-          </label>
-          <div className="card-body">
-            <small className="form-text">Or load an example save</small>
-            <br />
-            <button className="btn btn-link" onClick={(e) => loadExample("iron-teeth-plains-1-1.json", exampleIronTeeth)}>Iron Teeth 1-1 Plains 256x256</button>
-            <button className="btn btn-link" onClick={(e) => loadExample("lets-play-plains.json", exmapleLetsPlay)}>Lets Play Plains 256x256</button>
-          </div>
-        </div>
-        <div className="p-2 text-center">
-          <small className="form-text">
-            This editor is made by <a href="https://bonaroo.nl/" rel="noreferrer" target="_blank">Charper Bonaroo BV</a> and is not officially
-            supported by Timberborn. Charper Bonaroo BV is not affiliated with Mechanistry.
-            <br />
-            <br />
-            <a className="btn btn-sm btn-link" rel="noreferrer" href="https://github.com/charperbonaroo/timberborn-save-editor" target="_blank">Github</a>
-            {" "}
-            <a className="btn btn-sm btn-link" href="mailto:toby@bonaroo.nl">Contact</a>
-            {" "}
-            <span className="btn-sm" style={{ display: "inline-block", lineHeight: "1.5", verticalAlign: "middle" }}>Discord: <b>gamebuster800#2213</b></span>
-          </small>
-        </div>
-        <div className="text-muted" style={{ fontFamily: "monospace", fontSize: "10pt" }}>
-          <p>
-            <b>Changelog</b>
-          </p>
-          <p>
-            <b>2023-03-11</b>
-          </p>
-          <p>
-            Thank you for using this tool. You can request features or bugfixes via Github!
-            We're not playing Timberborn ourselves at this moment, so please do let us know
-            about any issues!
-          </p>
-          <ul>
-            <li>Change "Finish" behavior to prevent the game from crashing sometimes</li>
-            <li>Add "Finish All" button</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </div>
+  return <main className="container my-5" style={{ maxWidth: 760 }}>
+    <div className="card shadow-sm"><div className="card-body p-4">
+      <span className="badge text-bg-success mb-3">Timberborn 1.1 support</span>
+      <h1>Timberborn Save Editor</h1>
+      <p>Edit science, weather, inventories, construction and beavers. Saves stay in your browser.</p>
+      <label htmlFor="save-file" className="form-label">Open a save file</label>
+      <input id="save-file" type="file" accept=".json,.timber" onChange={onInput} disabled={loading} className="form-control" />
+      {loading && <p role="status" className="mt-2">Loading save…</p>}
+      {error && <p role="alert" className="alert alert-danger mt-3">{error}</p>}
+      <p className="form-text">Windows save folder: <code>%USERPROFILE%\Documents\Timberborn\Saves\</code></p>
+      <p className="form-text">Keep the original save as a backup. Download edits as a separate .timber file.</p>
+      <hr />
+      <p className="mb-1">Try a legacy example</p>
+      <button disabled={loading} className="btn btn-link" onClick={() => loadExample("iron-teeth")}>Iron Teeth · Plains</button>
+      <button disabled={loading} className="btn btn-link" onClick={() => loadExample("lets-play")}>Folktails · Plains</button>
+    </div></div>
+    <p className="text-muted small mt-3">Unofficial editor, originally by Charper Bonaroo BV. Not affiliated with Mechanistry. <a href="https://github.com/charperbonaroo/timberborn-save-editor">Source code</a></p>
+  </main>;
 }

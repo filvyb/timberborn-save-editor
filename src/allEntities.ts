@@ -2,6 +2,9 @@ import { StockpileUtil } from "./StockpileUtil";
 
 export const entities = {
   PATH_ENTITIES: [
+    "Path",
+    "Stairs.Folktails",
+    "Stairs.IronTeeth",
     "Path.Folktails",
     "Path.IronTeeth",
     "Slope",

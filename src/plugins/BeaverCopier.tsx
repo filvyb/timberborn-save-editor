@@ -1,5 +1,5 @@
 import { sample, sortBy } from "lodash";
-import { useCallback, useState, useMemo } from "react";
+import { useCallback, useState, useMemo, type FormEvent } from "react";
 import { BeaverUtil } from "../BeaverUtil";
 import { deepCopy } from "../deepCopy";
 import { DemoSave, DemoSaveEntity, UnknownEntity } from "../DemoSave";
@@ -31,18 +31,12 @@ export const BeaverCopier: IEditorPlugin<DemoSave, DemoSave> = {
     const [targetAmount, setTargetAmount] = useState(70);
     const [beaverId, setBeaverId] = useState<string | null>(null);
 
-    const sortedBeavers = sortBy(beavers.slice(), _ => -(_ as any).Components.Character.DayOfBirth);
+    const sortedBeavers = sortBy(beavers.slice(), _ => -BeaverUtil.character(_).DayOfBirth);
 
     const offset = page * pageSize;
 
     const copyBeaver = useCallback((beaver: UnknownEntity) => {
-      const newBeaver = deepCopy(beaver);
-      BeaverUtil.reset(newBeaver);
-      BeaverUtil.setDefaultName(initialData, newBeaver);
-      if (newBeaver.Template === "BeaverAdult") {
-        BeaverUtil.setAge(initialData, beaver, 5)
-      }
-      return newBeaver;
+      return BeaverUtil.copy(initialData, beaver);
     }, [initialData]);
 
     const duplicate = useCallback((beaver: UnknownEntity) => {
@@ -60,11 +54,13 @@ export const BeaverCopier: IEditorPlugin<DemoSave, DemoSave> = {
     const hasNextPage = pageSize + offset < beavers.length;
 
     const doSetBeaverCount = useCallback(() => {
+      if (!Number.isSafeInteger(targetAmount) || targetAmount < beavers.length || targetAmount > 10000) return;
       const adults = beavers.filter(_ => _.Template === "BeaverAdult");
-      const newBeavers = beavers.slice();
+      const newBeavers = deepCopy(beavers);
       for (const beaver of newBeavers) {
         BeaverUtil.setDefaultNeeds(beaver);
       }
+      if (adults.length === 0) return;
       while (newBeavers.length < targetAmount) {
         newBeavers.push(copyBeaver(sample(adults)!));
       }
@@ -99,7 +95,7 @@ export const BeaverCopier: IEditorPlugin<DemoSave, DemoSave> = {
             </div>
           </div>
           <div className={["collapse", beaverId ? "show" : ""].join(" ")}>
-            {beaverId && <BeaverEditor beaver={editingBeaver} updateBeaver={updateBeaver} />}
+            {beaverId && <BeaverEditor key={beaverId} beaver={editingBeaver} updateBeaver={updateBeaver} />}
           </div>
         </div>
         <table className="table my-0">
@@ -113,12 +109,12 @@ export const BeaverCopier: IEditorPlugin<DemoSave, DemoSave> = {
           </thead>
           <tbody>
             {sortedBeavers.slice(offset, offset + pageSize).map((beaver: any) => <tr key={beaver.Id}>
-              <td>{beaver.Components.Character.Name}</td>
-              <td>{initialData.Singletons.DayNightCycle.DayNumber - beaver.Components.Character.DayOfBirth} {beaver.Template === "BeaverChild" ? <small>(child)</small> : null}</td>
+              <td>{BeaverUtil.getName(beaver)}</td>
+              <td>{initialData.Singletons.DayNightCycle.DayNumber - BeaverUtil.character(beaver).DayOfBirth} {beaver.Template === "BeaverChild" ? <small>(child)</small> : null}</td>
               <td>
-                x: <b>{Math.round(beaver.Components.Character.Position.X)}</b>{" "}
-                y: <b>{Math.round(beaver.Components.Character.Position.Y)}</b>{" "}
-                z: <b>{Math.round(beaver.Components.Character.Position.Z)}</b>{" "}
+                x: <b>{Math.round(BeaverUtil.character(beaver).Position.X)}</b>{" "}
+                y: <b>{Math.round(BeaverUtil.character(beaver).Position.Y)}</b>{" "}
+                z: <b>{Math.round(BeaverUtil.character(beaver).Position.Z)}</b>{" "}
               </td>
               <td className="text-end py-1">
                 <button type="button" onClick={() => setBeaverId(beaver.Id)} className="btn btn-light btn-sm">Edit</button>
@@ -134,10 +130,10 @@ export const BeaverCopier: IEditorPlugin<DemoSave, DemoSave> = {
                     Showing <strong>{offset}</strong> - <strong>{Math.min(beavers.length, offset + pageSize)}</strong> of <strong>{beavers.length}</strong>
                   </div>
                   <form className="me-3 d-flex" onSubmit={(event) => { event.preventDefault(); doSetBeaverCount(); }}>
-                    <label className="form-label me-1 mt-1 mb-0" htmlFor="addRandom">Set beavers</label>
-                    <input type="number" id="addRandom" className="form-control form-control-sm" value={targetAmount}
+                    <label className="form-label me-1 mt-1 mb-0" htmlFor="addRandom">Grow population to</label>
+                    <input type="number" id="addRandom" min={beavers.length} max={10000} required className="form-control form-control-sm" value={targetAmount}
                       onChange={(event) => { setTargetAmount(parseInt(event.target.value, 10)) }} width={3} style={{ width: 80 }} />
-                    <button type="submit" className="ms-1 btn btn-primary btn-sm">Set</button>
+                    <button type="submit" disabled={!beavers.some(beaver => beaver.Template === "BeaverAdult")} className="ms-1 btn btn-primary btn-sm">Add</button>
                   </form>
                   <div className="me-3 d-flex">
                     <label className="form-label me-1 mt-1 mb-0" htmlFor="pageSize">Pagesize</label>
@@ -182,8 +178,8 @@ function BeaverStatus({ entities }: { entities: DemoSaveEntity[] }) {
 }
 
 function BeaverEditor({ beaver, updateBeaver }: { beaver?: any, updateBeaver: (patch: any) => void }) {
-  const [beaverData, setBeaverData] = useState(deepCopy(beaver.Components.Character));
-  const onSubmit = useCallback((e) => {
+  const [beaverData, setBeaverData] = useState({ Name: BeaverUtil.getName(beaver) });
+  const onSubmit = useCallback((e: FormEvent) => {
     e.preventDefault();
     updateBeaver(beaverData);
   }, [beaverData, updateBeaver]);

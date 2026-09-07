@@ -9,7 +9,7 @@ export function PluginShow({ saveData, pluginId, onClose, onSubmit }: { saveData
   const data = useMemo(() => read(deepCopy(saveData)), [read, saveData]);
 
   const onSubmitData = useCallback((newData: unknown) => {
-    onSubmit(deepCopy(write(saveData, newData)));
+    onSubmit(deepCopy(write(deepCopy(saveData), newData)));
   }, [write, saveData, onSubmit]);
 
   return <Editor initialData={data} onClose={onClose} onSubmit={onSubmitData} />;

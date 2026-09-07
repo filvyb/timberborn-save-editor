@@ -15,7 +15,6 @@ export const StockpilePlugin: IEditorPlugin<DemoSave, DemoSave> = {
   write: (_, data) => data,
 
   Preview: ({ saveData }) => {
-    (window as any).__saveData = saveData;
     const stockpiles = useMemo(() => StockpileUtil.getStockpiles(saveData), [saveData]);
     const allGoods = useMemo(() => stockpiles.reduce((acc, stockpile) => StockpileUtil.countGoods(stockpile, acc), {} as Record<string, number>), [stockpiles]);
 
@@ -29,10 +28,9 @@ export const StockpilePlugin: IEditorPlugin<DemoSave, DemoSave> = {
     const [stockpiles, setStockpiles] = useState(() => StockpileUtil.getStockpiles(initialData));
 
     const setStockpile = useCallback((type: "self" | "all", stockpile: UnknownEntity) => {
-      setStockpiles(stockpiles.slice().map((_) => (type === "all" ? _.Template === stockpile.Template : _.Id === stockpile.Id) ? {
-        ..._,
-        Components: { ..._.Components, "Inventory:Stockpile": stockpile.Components["Inventory:Stockpile"] }
-      } : _));
+      setStockpiles(stockpiles.map(target =>
+        (type === "all" ? StockpileUtil.canApplyTo(stockpile, target) : target.Id === stockpile.Id)
+          ? StockpileUtil.setGoods(target, StockpileUtil.countGoods(stockpile)) : target));
       setStockpileId(null);
     }, [setStockpiles, stockpiles, setStockpileId])
 
@@ -65,32 +63,23 @@ export const StockpilePlugin: IEditorPlugin<DemoSave, DemoSave> = {
 }
 
 function StockpileForm({ stockpile, setStockpile }: { stockpile: UnknownEntity, setStockpile: (type: "self" | "all", stockpile: UnknownEntity) => void }) {
-  const goods: string[] = useMemo(() => [(stockpile.Components.SingleGoodAllower as any).AllowedGood?.Id].filter(_ => _), [stockpile]);
+  const goods = useMemo(() => StockpileUtil.getAllowedGoods(stockpile), [stockpile]);
   const [counts, setCounts] = useState(() => StockpileUtil.countGoods(stockpile));
+  const [error, setError] = useState("");
 
   const onSubmit = useCallback((event: FormEvent) => {
     event.preventDefault();
     const type = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "all" ? "all" : "self";
-    setStockpile(type, {
-      ...stockpile,
-      Components: {
-        ...stockpile.Components,
-        "Inventory:Stockpile": {
-          Storage: {
-            Goods: toPairs(counts).filter(([k, v]) => v && v > 0).map(([Id, Amount]) => ({ Good: { Id }, Amount }))
-          }
-        }
-      }
-    })
+    try { setStockpile(type, StockpileUtil.setGoods(stockpile, counts)); }
+    catch (error) { setError(error instanceof Error ? error.message : String(error)); }
   }, [stockpile, setStockpile, counts]);
-
 
   const setCount = useCallback((good: string, count: number) => {
     setCounts({ ...counts, [good]: count });
   }, [setCounts, counts]);
 
   const totalCounts = sum(map(values(counts), _ => _ || 0));
-  const capacity = StockpileUtil.getCapacity(stockpile) ?? 0;
+  const capacity = StockpileUtil.getCapacity(stockpile);
 
   const fillToCapacity = useCallback((capacity: number) => {
     const initialMaxGood = Math.floor(capacity / goods.length);
@@ -107,35 +96,38 @@ function StockpileForm({ stockpile, setStockpile }: { stockpile: UnknownEntity, 
       <div>
         <b>{stockpile.Template}</b>
         <div style={{ whiteSpace: "nowrap" }}>
-          x: <b>{Math.round((stockpile.Components.BlockObject as any).Coordinates.X)}</b>{" "}
-          y: <b>{Math.round((stockpile.Components.BlockObject as any).Coordinates.Y)}</b>{" "}
-          z: <b>{Math.round((stockpile.Components.BlockObject as any).Coordinates.Z)}</b>{" "}
+          x: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.X)}</b>{" "}
+          y: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.Y)}</b>{" "}
+          z: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.Z)}</b>{" "}
         </div>
       </div>
       <form className="flex-fill" onSubmit={onSubmit}>
+        {error && <p role="alert" className="text-danger">{error}</p>}
+        {goods.length === 0 && <p>Select an allowed good in Timberborn before filling this storage.</p>}
         {goods.map((good) => <div key={good} className="row mb-3">
-          <label className="col-sm-2 col-form-label col-form-label-sm text-end">{good}</label>
+          <label htmlFor={`stock-${stockpile.Id}-${good}`} className="col-sm-2 col-form-label col-form-label-sm text-end">{good}</label>
           <div className="col-sm-10">
-            <input className="form-control form-control-sm" type="number"
-              onChange={(event) => { setCount(good, event.target.valueAsNumber ?? 0) }} value={counts[good] || ""} />
+            <input id={`stock-${stockpile.Id}-${good}`} className="form-control form-control-sm" type="number"
+              onChange={(event) => { setCount(good, event.target.valueAsNumber) }} min={0} step={1} required value={Number.isFinite(counts[good]) ? counts[good] : ""} />
           </div>
         </div>)}
         <div className="row">
           <div className="col-sm-10 offset-sm-2 d-flex">
             <button type="submit" name="submit" value="self" className="btn btn-primary btn-sm">OK</button>
-            {totalCounts > capacity
+            {capacity !== undefined && totalCounts > capacity
               ? <div className="text-danger p-1">Warning: <strong>{totalCounts}</strong> storage exceeds capacity of <strong>{capacity}</strong>!</div>
-              : <div className="p-1"><strong>{totalCounts}</strong> / <strong>{capacity}</strong></div>}
+              : <div className="p-1"><strong>{totalCounts}</strong> / <strong>{capacity ?? "unknown capacity"}</strong></div>}
             <button
+              disabled={capacity === undefined || goods.length === 0}
               className="ms-auto btn btn-secondary btn-sm"
               onClick={(e) => {
                 e.preventDefault();
-                fillToCapacity(capacity);
+                if (capacity !== undefined) fillToCapacity(capacity);
               }}
             >
               Fill
             </button>
-            <button type="submit" name="submit" value="all" className="ms-1 btn btn-danger btn-sm">OK &amp; update all</button>
+            <button type="submit" name="submit" value="all" className="ms-1 btn btn-danger btn-sm">Apply to matching storages</button>
           </div>
         </div>
       </form>
@@ -149,9 +141,9 @@ function StockpileButton({ stockpile, setStockpileId }: { stockpile: UnknownEnti
       <div>
         <b>{stockpile.Template}</b>
         <div style={{ whiteSpace: "nowrap" }}>
-          x: <b>{Math.round((stockpile.Components.BlockObject as any).Coordinates.X)}</b>{" "}
-          y: <b>{Math.round((stockpile.Components.BlockObject as any).Coordinates.Y)}</b>{" "}
-          z: <b>{Math.round((stockpile.Components.BlockObject as any).Coordinates.Z)}</b>{" "}
+          x: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.X)}</b>{" "}
+          y: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.Y)}</b>{" "}
+          z: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.Z)}</b>{" "}
         </div>
       </div>
       <StockpileInventoryTable counts={StockpileUtil.countGoods(stockpile)} />

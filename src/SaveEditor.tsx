@@ -1,3 +1,4 @@
+import { EditorErrorBoundary } from "./EditorErrorBoundary";
 import { useCallback, useState } from "react";
 import { DemoSave } from "./DemoSave";
 import { Navbar } from "./Navbar";
@@ -26,6 +27,6 @@ export function SaveEditor({ saveData, onSubmit }: { saveData: DemoSave, onSubmi
     <Navbar onHome={onHome} />
     {pluginId === null
       ? <PluginIndex saveData={saveData} onSelectPlugin={setPluginId} />
-      : <PluginShow saveData={saveData} pluginId={pluginId} onClose={() => setPluginId(null)} onSubmit={onSubmitPlugin} />}
+      : <EditorErrorBoundary key={pluginId} onClose={() => setPluginId(null)}><PluginShow saveData={saveData} pluginId={pluginId} onClose={() => setPluginId(null)} onSubmit={onSubmitPlugin} /></EditorErrorBoundary>}
   </>;
 }

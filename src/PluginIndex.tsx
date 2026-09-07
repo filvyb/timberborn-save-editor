@@ -8,6 +8,7 @@ export function PluginIndex({ saveData, onSelectPlugin }: { saveData: DemoSave, 
     .filter(_ => typeof _.enabled === "function" ? _.enabled({saveData}) : _.enabled), "group")), [saveData]);
 
   return <div className="container">
+    <p className="text-muted mt-3">{saveData.__originalFilename} · Timberborn {saveData.GameVersion} · {saveData.Singletons.MapSize.Size.X} × {saveData.Singletons.MapSize.Size.Y}</p>
     {groupedPlugins.map(([groupName, plugins]) => <div key={groupName} className="my-2">
       <h2 className="ps-2">{groupName}</h2>
       <div className="list-group my-2">

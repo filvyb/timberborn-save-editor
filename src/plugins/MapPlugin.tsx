@@ -1,20 +1,20 @@
 import { BeaverAdultEntity, DemoSave, UnknownEntity } from "../DemoSave";
 import { IEditorPlugin } from "../IEditorPlugin";
 import { Canvas } from '@react-three/fiber'
-import { FormEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import lodash, { compact, get, set, toPairs, uniq } from "lodash";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import lodash, { compact, get, set, uniq } from "lodash";
 import { MapControls } from "@react-three/drei";
 import './MapPlugin.scss';
 import { Navbar } from "../Navbar";
-import { BoxBufferGeometry, BufferGeometry, ConeBufferGeometry, CylinderBufferGeometry, Mesh, MeshStandardMaterial, PlaneBufferGeometry } from "three";
-import { EffectComposer, SSAO as _SSAO } from "@react-three/postprocessing";
+import { BoxGeometry, BufferGeometry, ConeGeometry, CylinderGeometry, Mesh, MeshStandardMaterial, PlaneGeometry } from "three";
+import { readMapData, type MapData } from "../MapData";
+import { createTerrainGeometry } from "../TerrainGeometry";
+import { BeaverUtil } from "../BeaverUtil";
 import { deepCopy } from "../deepCopy";
 import { StockpileUtil } from "../StockpileUtil";
 import { entities } from "../allEntities";
 
-const SSAO = _SSAO as any;
-const { BlendFunction } = require("postprocessing") as any;
-const BufferGeometryUtils = require('three/examples/jsm/utils/BufferGeometryUtils.js') as any;
+import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
 const { TREE_ENTITIES, BEAVER_ENTITIES, PATH_ENTITIES, PLATFORM_ENTITIES, STORAGE_ENTITIES: STOCKPILE_ENTITIES } = entities;
 
 interface State {
@@ -27,18 +27,6 @@ interface MutableState extends State {
   setEntity: (entity: UnknownEntity) => void;
   selectEntityId: (id: string | null) => void;
   selectedEntity: UnknownEntity | null;
-}
-
-interface MapData {
-  i2x: (i: number) => number,
-  i2y: (i: number) => number,
-  i2xy: (i: number) => [number, number],
-  i2xyz: (i: number, y: number) => [number, number, number],
-  heightMap: Uint8Array;
-  waterDepthMap: Float32Array;
-  moistureMap: Float32Array;
-  mapSizeX: number;
-  mapSizeY: number;
 }
 
 interface EntityData {
@@ -80,25 +68,6 @@ function readEntityData(saveData: DemoSave) {
       entitiesIdsByTemplate: {}
     } as EntityData)
 }
-
-function readMapData(saveData: DemoSave) {
-  const { Singletons } = saveData;
-  const mapSizeX = Singletons.MapSize.Size.X;
-  const mapSizeY = Singletons.MapSize.Size.Y;
-
-  return {
-    i2x: (index: number) => index % mapSizeY,
-    i2y: (index: number) => Math.floor(index / mapSizeY),
-    i2xy: (index: number) => [index % mapSizeY, Math.floor(index / mapSizeY)] as [number, number],
-    i2xyz: (index: number, y: number) => [index % mapSizeY, y, Math.floor(index / mapSizeY)] as [number, number, number],
-    mapSizeX,
-    mapSizeY,
-    heightMap: Uint8Array.from(Singletons.TerrainMap.Heights.Array.split(" ").map(_ => parseInt(_, 10))),
-    moistureMap: Float32Array.from(Singletons.SoilMoistureSimulator.MoistureLevels.Array.split(" ").map(_ => parseFloat(_))),
-    waterDepthMap: Float32Array.from(Singletons.WaterMap.WaterDepths.Array.split(" ").map(_ => parseFloat(_))),
-  }
-}
-
 
 export const MapPlugin: IEditorPlugin<State, State> = {
   id: "MapPlugin",
@@ -153,12 +122,10 @@ export const MapPlugin: IEditorPlugin<State, State> = {
       }
 
       if (!oldEntity || oldEntity.Template !== entity.Template) {
-        newState.entityData.entitiesIdsByTemplate = {
-          ...newState.entityData.entitiesIdsByTemplate,
-          [oldEntity.Template]: (newState.entityData.entitiesIdsByTemplate[oldEntity.Template] || [])
-            .filter(_ => !oldEntity || (oldEntity && _ !== oldEntity.Id)),
-          [entity.Template]: [...newState.entityData.entitiesIdsByTemplate[entity.Template], entity.Id]
-        };
+        const byTemplate = { ...newState.entityData.entitiesIdsByTemplate };
+        if (oldEntity) byTemplate[oldEntity.Template] = (byTemplate[oldEntity.Template] ?? []).filter(id => id !== oldEntity.Id);
+        byTemplate[entity.Template] = [...(byTemplate[entity.Template] ?? []), entity.Id];
+        newState.entityData.entitiesIdsByTemplate = byTemplate;
       }
 
       setState(newState);
@@ -176,17 +143,9 @@ export const MapPlugin: IEditorPlugin<State, State> = {
       <Gui {...state} onSubmit={onSubmit} onClose={onClose} selectEntityId={selectEntityId} selectedEntity={selectedEntity} setEntity={setEntity} />
 
       <Canvas className="Map__Canvas" camera={{ position: [32, 64, -64] }}>
-        <EffectComposer>
-          <SSAO
-            blendFunction={BlendFunction.MULTIPLY}
-            samples={50}
-            radius={2}
-            intensity={30}
-          />
-        </EffectComposer>
         <axesHelper position={[0, 8, 0]} scale={[4, 4, 4]} />
-        <ambientLight intensity={0.3} />
-        <directionalLight position={[10, 10, 10]} intensity={0.4} />
+        <ambientLight intensity={1.5} />
+        <directionalLight position={[10, 30, 10]} intensity={2} />
         <group scale={[1, 1, -1]}>
           <group position={[mapSizeX / -2, 0, mapSizeY / -2]}>
             <SlowBoxesHeightMap {...state} />
@@ -240,7 +199,7 @@ function Gui(state: GuiProps) {
 }
 
 function BeaverForm({ selectedEntity, selectEntityId, setEntity }: MutableState) {
-  const [beaver, setBeaver] = useState<BeaverAdultEntity>(selectedEntity as any);
+  const [beaver, setBeaver] = useState<BeaverAdultEntity>(selectedEntity!);
 
   const getValue = (path: (string | number)[]) => get(beaver, path);
   const setValue = (path: (string | number)[], format: (val: string) => any = (x) => x) => (event: FormEvent) => setBeaver(set(deepCopy(beaver), path, format((event.target as any).value)))
@@ -249,11 +208,11 @@ function BeaverForm({ selectedEntity, selectEntityId, setEntity }: MutableState)
     <div className="mb-1 row">
       <label htmlFor="name" className="col-sm-4 col-form-label p-1">Name</label>
       <div className="col-sm-8">
-        <input type="text" id="name" className="form-control p-1" value={getValue(["Components", "Character", "Name"])} onChange={setValue(["Components", "Character", "Name"])} />
+        <input type="text" id="name" className="form-control p-1" value={BeaverUtil.getName(beaver)} onChange={event => { const copy = deepCopy(beaver); BeaverUtil.setName(copy, event.target.value); setBeaver(copy); }} />
       </div>
     </div>
 
-    {beaver.Components.NeedManager.Needs.map((need, index) => <div className="mb-1 row" key={index}>
+    {(beaver.Components.NeedManager?.Needs ?? []).map((need: { Name: string; Points: number }, index: number) => <div className="mb-1 row" key={index}>
       <label htmlFor={"need-" + index} className="col-sm-4 col-form-label px-1 py-0">{need.Name}</label>
       <div className="col-sm-8">
         <input type="range" min="0" max="1" step="0.001" id={"need-" + index} className="form-control p-1"
@@ -288,12 +247,12 @@ function Stockpile({ stockpile, selectEntityId, selected }: { selected: boolean,
   const onPointerEnter = () => { setIsHover(true); }
   const onPointerLeave = () => { setIsHover(false); }
 
-  const pos = (stockpile.Components as any).BlockObject.Coordinates;
+  const pos = stockpile.Components.BlockObject.Coordinates;
   const x: number = pos.X;
   const y: number = pos.Z;
   const z: number = pos.Y;
 
-  const meshRef = useRef<Mesh>();
+  const meshRef = useRef<Mesh>(null);
   const template = stockpile.Template;
 
   useLayoutEffect(() => {
@@ -305,7 +264,7 @@ function Stockpile({ stockpile, selectEntityId, selected }: { selected: boolean,
     let sizeZ = 2;
     let geom: BufferGeometry | null = null;
 
-    if (/SmallWarehouseNew/.test(template)) {
+    if (/SmallWarehouseNew|SmallPile/.test(template) || (/SmallWarehouse/.test(template) && StockpileUtil.getCapacity(stockpile) === 30)) {
       sizeX = 1;
       sizeZ = 1;
       sizeY = 1;
@@ -318,20 +277,20 @@ function Stockpile({ stockpile, selectEntityId, selected }: { selected: boolean,
     } else if (/LargeWarehouse/.test(template)) {
       sizeZ = 3;
 
-      geom = BufferGeometryUtils.mergeBufferGeometries([
-        new BoxBufferGeometry(sizeX, sizeY, sizeZ, 1.0, 1.0),
-        new BoxBufferGeometry(1, sizeY, sizeZ, 1.0, 1.0).translate(0, 1, 0),
+      geom = BufferGeometryUtils.mergeGeometries([
+        new BoxGeometry(sizeX, sizeY, sizeZ, 1.0, 1.0),
+        new BoxGeometry(1, sizeY, sizeZ, 1.0, 1.0).translate(0, 1, 0),
       ])
     } else if (/LargeWaterTank/.test(template)) {
       sizeY = 3
-      geom = BufferGeometryUtils.mergeBufferGeometries([
-        new CylinderBufferGeometry(1.0, 1.0, sizeY, 8, 8, false).translate(0.5, 0, 0),
-        new BoxBufferGeometry(2, 1, 1, 1.0, 1.0).translate(-0.5, -1, 0.5),
+      geom = BufferGeometryUtils.mergeGeometries([
+        new CylinderGeometry(1.0, 1.0, sizeY, 8, 8, false).translate(0.5, 0, 0),
+        new BoxGeometry(2, 1, 1, 1.0, 1.0).translate(-0.5, -1, 0.5),
       ])
     }
 
     if (!geom) {
-      geom = new BoxBufferGeometry(sizeX, sizeY, sizeZ, 1.0, 1.0);
+      geom = new BoxGeometry(sizeX, sizeY, sizeZ, 1.0, 1.0);
     }
 
     if (isHover || selected) {
@@ -341,7 +300,9 @@ function Stockpile({ stockpile, selectEntityId, selected }: { selected: boolean,
     geom.translate(sizeX / 2 - 0.5, sizeY / 2, sizeZ / 2 - 0.5);
     rotate(geom, stockpile);
 
+    meshRef.current.geometry.dispose();
     meshRef.current.geometry = geom;
+    return () => geom?.dispose();
   }, [stockpile, template, selected, isHover]);
 
   return <mesh ref={meshRef} onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave} onClick={onClick} key={stockpile.Id} position={[x, y, z]}>
@@ -365,14 +326,14 @@ function Beaver({ beaver, selectEntityId, selected }: { selected: boolean, beave
   const onPointerEnter = () => { setIsHover(true); }
   const onPointerLeave = () => { setIsHover(false); }
 
-  const pos = (beaver.Components as any).Character.Position;
+  const pos = BeaverUtil.character(beaver).Position;
   const isAdult = beaver.Template === "BeaverAdult";
   const x: number = pos.X - 0.5;
   const y: number = pos.Y + 0.1 + (isAdult ? 0.5 : 0.3);
   const z: number = pos.Z - 0.5;
   return <mesh onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave} onClick={onClick} key={beaver.Id} position={[x, y, z]}>
     <meshStandardMaterial color={selected ? "#651FFF" : (isHover ? "#FF8A65" : "#E64A19")} />
-    <cylinderBufferGeometry args={[
+    <cylinderGeometry args={[
       (isHover || selected) ? 0.4 : 0.2,
       (isHover || selected) ? 0.4 : 0.2,
       (beaver.Template === "BeaverAdult" ? 1.0 : 0.6) * (isHover || selected ? 1.2 : 1.0),
@@ -383,33 +344,35 @@ function Beaver({ beaver, selectEntityId, selected }: { selected: boolean, beave
 }
 
 function StockpileForm({ selectedEntity, selectEntityId, setEntity }: MutableState) {
-  const goodIds: string[] = useMemo(() => selectedEntity ? [(selectedEntity.Components.SingleGoodAllower as any).AllowedGood?.Id].filter(_ => _) : [], [selectedEntity]);
+  const goodIds: string[] = useMemo(() => selectedEntity ? StockpileUtil.getAllowedGoods(selectedEntity) : [], [selectedEntity]);
   const [countGoods, setCountGoods] = useState<Record<string, number>>(() => StockpileUtil.countGoods(selectedEntity!, {}));
-  const capacity = StockpileUtil.getCapacity(selectedEntity!)!;
+  const capacity = StockpileUtil.getCapacity(selectedEntity!);
+  const [error, setError] = useState("");
   const totalCounts = Object.values(countGoods).reduce((a, b) => a + b, 0);
 
   const doSubmit = useCallback((event: FormEvent) => {
     event.preventDefault();
-    const newEntity = deepCopy(selectedEntity) as any;
-    newEntity.Components["Inventory:Stockpile"] = { Storage: { Goods: toPairs(countGoods).map(([Id, Amount]) => ({ Good: { Id }, Amount })) } };
-    setEntity(newEntity);
+    const newEntity = deepCopy(selectedEntity!);
+    try { setEntity(StockpileUtil.setGoods(newEntity, countGoods)); }
+    catch (error) { setError(error instanceof Error ? error.message : String(error)); return; }
     selectEntityId(null);
   }, [countGoods, selectEntityId, setEntity, selectedEntity]);
 
   return <form onSubmit={doSubmit}>
+    {error && <p role="alert" className="text-danger">{error}</p>}
     {goodIds.map((goodId) => <div className="mb-1 row" key={goodId}>
       <label htmlFor={"good-" + goodId} className="col-sm-4 col-form-label col-form-label-sm">{goodId}</label>
       <div className="col-sm-8">
-        <input type="number" id={"good-" + goodId} className="form-control form-control-sm" value={countGoods[goodId] || 0}
+        <input type="number" min={0} step={1} required id={"good-" + goodId} className="form-control form-control-sm" value={countGoods[goodId] || 0}
           onChange={(event) => setCountGoods({ ...countGoods, [goodId]: event.target.valueAsNumber || 0 })} />
       </div>
     </div>)}
 
     <div className="mt-2 row">
       <div className="col-sm-8 offset-sm-4">
-        {totalCounts > capacity
+        {capacity !== undefined && totalCounts > capacity
           ? <div className="text-danger p-1">Warning: <strong>{totalCounts}</strong> storage exceeds capacity of <strong>{capacity}</strong>!</div>
-          : <div className="p-1"><strong>{totalCounts}</strong> / <strong>{capacity}</strong></div>}
+          : <div className="p-1"><strong>{totalCounts}</strong> / <strong>{capacity ?? "unknown capacity"}</strong></div>}
 
         <button type="submit" className="btn btn-secondary btn-sm">OK</button>
         {" "}
@@ -428,7 +391,7 @@ function createTreeGeom({ dry, dead, adult, x, y, z }: {
   z: number;
   y: number;
 }) {
-  return new ConeBufferGeometry((adult ? 0.4 : 0.2) * (dead ? 0.5 : 1.0), adult ? 2.0 : 0.5, 4.0, 4.0)
+  return new ConeGeometry((adult ? 0.4 : 0.2) * (dead ? 0.5 : 1.0), adult ? 2.0 : 0.5, 4.0, 4.0)
     .translate(x, y + 0.5, z)
 }
 
@@ -436,13 +399,15 @@ function meshWithColorFromGeoms(geometries: any[], color: string, opacity: numbe
   if (geometries.length === 0) {
     return new Mesh();
   }
-  const geom = BufferGeometryUtils.mergeBufferGeometries(geometries)
+  const geom = BufferGeometryUtils.mergeGeometries(geometries)!;
+  geometries.forEach(geometry => geometry.dispose());
   const mat = new MeshStandardMaterial({ color, opacity, transparent: opacity <= 0.99 });
   return new Mesh(geom, mat);
 }
 
 function getEntityRotationY(entity: UnknownEntity): number {
-  const orientationMatch = (entity as any).Components.BlockObject.Orientation?.Value?.match(/Cw(\d+)/);
+  const orientation = entity.Components.BlockObject.Orientation;
+  const orientationMatch = (typeof orientation === "string" ? orientation : orientation?.Value)?.match(/Cw(\d+)/);
   if (orientationMatch) {
     return parseFloat(orientationMatch[1]) / 180 * Math.PI;
   } else {
@@ -460,15 +425,15 @@ function PathsMap({ entityData }: State) {
     .map((_: any) => {
       let geom: BufferGeometry | null = null;
       if (/Slope|Stairs/.test(_.Template)) {
-        geom = new PlaneBufferGeometry(1, 1.44, 1, 1).rotateX(-Math.PI / 4).translate(0, 0.6, 0)
+        geom = new PlaneGeometry(1, 1.44, 1, 1).rotateX(-Math.PI / 4).translate(0, 0.6, 0)
         geom = rotate(geom, _);
       } else if (/DistrictGate/.test(_.Template)) {
-        geom = BufferGeometryUtils.mergeBufferGeometries([
-          new PlaneBufferGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.1, 0),
-          rotate(new BoxBufferGeometry(0.8, 1, 0.1, 1, 1, 1).translate(0, 0.5, 0), _),
+        geom = BufferGeometryUtils.mergeGeometries([
+          new PlaneGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.1, 0),
+          rotate(new BoxGeometry(0.8, 1, 0.1, 1, 1, 1).translate(0, 0.5, 0), _),
         ])
       } else {
-        geom = new PlaneBufferGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.1, 0)
+        geom = new PlaneGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.1, 0)
       }
 
       return geom ? geom.translate(
@@ -478,6 +443,7 @@ function PathsMap({ entityData }: State) {
       ) : null;
     }).filter(_ => _), "#BCAAA4", 0.8), [paths]);
 
+  useEffect(() => () => disposeMesh(mesh), [mesh]);
   return <primitive object={mesh} />;
 }
 
@@ -493,12 +459,12 @@ function PlatformsMap({ entityData }: State) {
         height = 3;
       }
       height -= 0.05;
-      geom = BufferGeometryUtils.mergeBufferGeometries([
-        new BoxBufferGeometry(0.1, height, 0.1, 1, 1, 1).translate(-0.4, height / 2, -0.4),
-        new BoxBufferGeometry(0.1, height, 0.1, 1, 1, 1).translate(0.4, height / 2, 0.4),
-        new BoxBufferGeometry(0.1, height, 0.1, 1, 1, 1).translate(0.4, height / 2, -0.4),
-        new BoxBufferGeometry(0.1, height, 0.1, 1, 1, 1).translate(-0.4, height / 2, 0.4),
-        new BoxBufferGeometry(0.95, 0.05, 0.95, 1, 1, 1).translate(0, height + 0.025, 0),
+      geom = BufferGeometryUtils.mergeGeometries([
+        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(-0.4, height / 2, -0.4),
+        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(0.4, height / 2, 0.4),
+        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(0.4, height / 2, -0.4),
+        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(-0.4, height / 2, 0.4),
+        new BoxGeometry(0.95, 0.05, 0.95, 1, 1, 1).translate(0, height + 0.025, 0),
       ]);
 
       return geom ? geom.translate(
@@ -508,6 +474,7 @@ function PlatformsMap({ entityData }: State) {
       ) : null;
     }).filter(_ => _), "#A1887F"), [paths]);
 
+  useEffect(() => () => disposeMesh(geom), [geom]);
   return <primitive object={geom} />;
 }
 
@@ -517,9 +484,9 @@ function TreesMap({ entityData }: State) {
   const { greenTrees, brownTrees } = useMemo(() => {
     const trees = treeEntities.map((_: any) => ({
       entity: _,
-      dry: _.Components.WateredNaturalResource.DryingProgress > 0.9999,
-      dead: false, // _.Components.LivingNaturalResource.IsDead as boolean,
-      adult: _.Components.Growable.GrowthProgress > 0.9999,
+      dry: (_.Components.WateredNaturalResource?.DryingProgress ?? _.Components.WateredNaturalResource?.DyingProgress ?? 0) > 0.9999,
+      dead: _.Components.LivingNaturalResource?.IsDead ?? false,
+      adult: (_.Components.Growable?.GrowthProgress ?? 1) > 0.9999,
       x: _.Components.BlockObject.Coordinates.X as number,
       z: _.Components.BlockObject.Coordinates.Y as number,
       y: _.Components.BlockObject.Coordinates.Z as number,
@@ -533,6 +500,7 @@ function TreesMap({ entityData }: State) {
     return { greenTrees, brownTrees }
   }, [treeEntities]);
 
+  useEffect(() => () => { disposeMesh(greenTrees); disposeMesh(brownTrees); }, [greenTrees, brownTrees]);
   return <group>
     <primitive object={greenTrees} />
     <primitive object={brownTrees} />
@@ -540,43 +508,27 @@ function TreesMap({ entityData }: State) {
 }
 
 function SlowBoxesWaterMap({ mapData }: State) {
-  const { i2x, i2y, heightMap, waterDepthMap } = mapData;
-
   const mesh = useMemo(() => {
-    const geoms = lodash(waterDepthMap).reduce((acc, y, i) => {
-      if (y > 0) {
-        acc.push(new PlaneBufferGeometry(1, 1, 1, 1)
-          .rotateX(-Math.PI / 2)
-          .translate(i2x(i), y * 0.95 + 0.05 + heightMap[i], i2y(i)));
-      }
-      return acc;
-    }, [] as BufferGeometry[]);
-
-    return meshWithColorFromGeoms(geoms, "#0044cc", 0.8);
-  }, [i2x, i2y, heightMap, waterDepthMap])
-
-  return <primitive object={mesh} />;
+    const clean: BufferGeometry[] = [];
+    const bad: BufferGeometry[] = [];
+    for (const surface of mapData.waterSurfaces) {
+      (surface.contamination > 0.5 ? bad : clean).push(new PlaneGeometry(1, 1)
+        .rotateX(-Math.PI / 2).translate(surface.x, surface.height + 0.01, surface.y));
+    }
+    return [meshWithColorFromGeoms(clean, "#287cb5", 0.75), meshWithColorFromGeoms(bad, "#a33e42", 0.8)];
+  }, [mapData]);
+  useEffect(() => () => mesh.forEach(disposeMesh), [mesh]);
+  return <group>{mesh.map((object, index) => <primitive key={index} object={object} />)}</group>;
 }
 
 function SlowBoxesHeightMap({ mapData }: State) {
-  const { heightMap, moistureMap, i2x, i2y } = mapData;
-  const { wetLand, dryLand } = useMemo(() => {
-    const { wetBoxes, dryBoxes } = lodash(heightMap)
-      .reduce((acc, height, index) => {
-        const isWet = moistureMap[index] > 0;
-        const box = new BoxBufferGeometry(1, height, 1, 1, 1, 1).translate(i2x(index), height / 2, i2y(index));
-        (isWet ? acc.wetBoxes : acc.dryBoxes).push(box);
-        return acc;
-      }, { wetBoxes: [] as BufferGeometry[], dryBoxes: [] as BufferGeometry[] })
+  const geometry = useMemo(() => createTerrainGeometry(mapData), [mapData]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return <mesh geometry={geometry}><meshStandardMaterial vertexColors /></mesh>;
+}
 
-    return {
-      wetLand: meshWithColorFromGeoms(wetBoxes, "#8BC34A"),
-      dryLand: meshWithColorFromGeoms(dryBoxes, "#795548")
-    }
-  }, [i2x, i2y, heightMap, moistureMap])
-
-  return <group>
-    <primitive object={wetLand} />
-    <primitive object={dryLand} />
-  </group>;
+function disposeMesh(mesh: Mesh) {
+  mesh.geometry.dispose();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  materials.forEach(material => material.dispose());
 }

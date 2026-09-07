@@ -1,35 +1,6 @@
 import { DemoSave, UnknownEntity } from "./DemoSave";
 import { buildingCategories } from "./allEntities";
 
-interface ConstructibleEntity {
-  Id: string;
-  Template: string;
-  Components: {
-    BlockObject: {
-      Coordinates: {
-        X: number;
-        Y: number;
-        Z: number;
-      };
-    };
-    Constructible: {
-      Finished: boolean;
-    };
-    ConstructionSite: {
-      BuildTimeProgressInHoursKey: number;
-    };
-    "Inventory:ConstructionSite"?: {
-      Storage: {
-        Goods: {
-          Ammount: number;
-          Good: any;
-        }[];
-      };
-    };
-    [key: string]: any;
-  };
-}
-
 const buildingTypes = new Map<string, string>(
   Object.entries(buildingCategories)
     .map(([type, buildings]) => buildings.map((building) => [building, type]))
@@ -37,36 +8,30 @@ const buildingTypes = new Map<string, string>(
 );
 
 export const ConstructionUtil = {
-  entityFilter: (entity: UnknownEntity) =>
-    !!entity.Components.Constructible &&
-    !(entity.Components.Constructible as any).Finished,
-  reverseEntityFilter: (entity: UnknownEntity) =>
-    !entity.Components.Constructible ||
-    (entity.Components.Constructible as any).Finished,
-  getConstructionSites: (saveData: DemoSave) =>
-    saveData.Entities.filter(
-      ConstructionUtil.entityFilter
-    ) as ConstructibleEntity[],
-  getBuildingType: (constructionSite: ConstructibleEntity | string) => {
+  isFinished: (entity: UnknownEntity): boolean =>
+    (entity.Components.BlockObjectState ?? entity.Components.Constructible)?.Finished !== false,
+  entityFilter: (entity: UnknownEntity) => !ConstructionUtil.isFinished(entity),
+  reverseEntityFilter: (entity: UnknownEntity) => ConstructionUtil.isFinished(entity),
+  getConstructionSites: (saveData: DemoSave) => saveData.Entities.filter(ConstructionUtil.entityFilter),
+  getBuildingType: (constructionSite: UnknownEntity | string) => {
     const template =
       typeof constructionSite === "string"
         ? constructionSite
         : constructionSite.Template;
     return buildingTypes.get(template) || "Other";
   },
-  finishConstruction: (constructionSite: ConstructibleEntity): void => {
-    constructionSite.Components.Constructible.Finished = true;
-    if (constructionSite.Components.ConstructionSite) {
+  finishConstruction: (constructionSite: UnknownEntity): void => {
+    const state = constructionSite.Components.BlockObjectState ?? constructionSite.Components.Constructible;
+    if (!state || state.Finished !== false) return;
+    state.Finished = true;
+    // Finished v1.1 buildings omit ConstructionSite. Keep delivered materials and all other components.
+    if (constructionSite.Components.BlockObjectState) {
+      delete constructionSite.Components.ConstructionSite;
+    } else if (constructionSite.Components.ConstructionSite) {
       constructionSite.Components.ConstructionSite.BuildTimeProgressInHoursKey = 1;
     }
   },
   finishAllConstruction: (saveData: DemoSave): void => {
-    saveData.Entities.forEach((entity) => {
-      if (
-        !!entity.Components.Constructible &&
-        !(entity.Components.Constructible as any).Finished
-      )
-        ConstructionUtil.finishConstruction(entity as ConstructibleEntity);
-    });
+    ConstructionUtil.getConstructionSites(saveData).forEach(ConstructionUtil.finishConstruction);
   },
 };
