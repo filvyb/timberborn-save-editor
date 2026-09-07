@@ -4,6 +4,9 @@ import { resolve } from "node:path";
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 import { loadSave, exportSave } from "../SaveFile";
+import { readEntityData, writeEntityData } from "../MapEntities";
+import { getBuildingVisual } from "../BuildingVisuals";
+import { createBuildingGeometry } from "../BuildingGeometry";
 import { readMapData } from "../MapData";
 import { ConstructionUtil } from "../ConstructionUtil";
 import { StockpileUtil } from "../StockpileUtil";
@@ -29,6 +32,15 @@ describe.skipIf(files.length === 0)("local Timberborn 1.1 example saves", () => 
     expect(JSON.parse(await unmodified.file("world.json")!.async("string"))).toEqual(originalWorld);
     for (const [name, file] of Object.entries(original.files)) {
       if (name !== "world.json" && !file.dir) expect(await unmodified.file(name)!.async("uint8array")).toEqual(await file.async("uint8array"));
+    }
+    const mapEntities = readEntityData(save);
+    expect(Object.keys(mapEntities.entitiesByIds)).toHaveLength(save.Entities.length);
+    expect(writeEntityData(save, mapEntities)).toEqual(save);
+    const templates = new Map(save.Entities.filter(entity => entity.Components.BlockObject).map(entity => [entity.Template, entity]));
+    for (const entity of templates.values()) {
+      const geometry = createBuildingGeometry(getBuildingVisual(entity));
+      expect([...geometry.getAttribute("position").array].every(Number.isFinite)).toBe(true);
+      geometry.dispose();
     }
     const map = readMapData(save);
     expect(map.heightMap.length).toBe(save.Singletons.MapSize.Size.X * save.Singletons.MapSize.Size.Y);

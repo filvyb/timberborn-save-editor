@@ -13,6 +13,6 @@ const Editor = lazy(async () => {
 export const MapPlugin: IEditorPlugin<DemoSave, DemoSave> = {
   id: "MapPlugin", name: "Map", group: "General", position: 2, enabled: true,
   read: save => save, write: (_save, data) => data,
-  Preview: () => <span>Interactive 3D terrain, water, trees, paths, storage and beavers.</span>,
+  Preview: () => <span>Interactive 3D terrain, water, buildings, trees and beavers.</span>,
   Editor: props => <Suspense fallback={<p className="container my-4" role="status">Loading 3D map…</p>}><Editor {...props} /></Suspense>,
 };

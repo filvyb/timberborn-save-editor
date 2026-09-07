@@ -74,6 +74,14 @@ test("edits and exports a supplied 1.1 save and opens its voxel map", async ({ p
     return gl !== null && gl.drawingBufferWidth > 0;
   })).toBe(true);
   await page.screenshot({ path: "test-results/v1.1-map.png" });
+  for (const template of ["Lodge.Folktails", "GearWorkshop.Folktails", "DoubleFloodgate.Folktails", "LargeWindTurbine.Folktails", "SuspensionBridge6x1.Folktails", "Overhang4x1.Folktails"]) {
+    await page.getByLabel("Find building").fill(template);
+    await page.getByRole("button", { name: new RegExp(`^${template.replaceAll(".", "\\.")} \\(`) }).first().click();
+    await expect(page.getByRole("heading", { name: template, exact: true })).toBeVisible();
+    await expect(page.getByText(/^Coordinates:/)).toBeVisible();
+    await page.getByRole("button", { name: "Close inspection" }).click();
+  }
+  await page.getByLabel("Find building").fill("");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   expect(errors).toEqual([]);
 });

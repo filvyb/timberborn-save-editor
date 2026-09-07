@@ -1,21 +1,24 @@
 import { BeaverAdultEntity, DemoSave, UnknownEntity } from "../DemoSave";
 import { IEditorPlugin } from "../IEditorPlugin";
-import { Canvas } from '@react-three/fiber'
-import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import lodash, { compact, get, set, uniq } from "lodash";
+import { Canvas, useThree } from '@react-three/fiber'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
+import { get, set, uniq } from "lodash";
 import { MapControls } from "@react-three/drei";
 import './MapPlugin.scss';
 import { Navbar } from "../Navbar";
-import { BoxGeometry, BufferGeometry, ConeGeometry, CylinderGeometry, Mesh, MeshStandardMaterial, PlaneGeometry } from "three";
+import { BufferGeometry, ConeGeometry, Mesh, MeshStandardMaterial, PlaneGeometry } from "three";
 import { readMapData, type MapData } from "../MapData";
 import { createTerrainGeometry } from "../TerrainGeometry";
 import { BeaverUtil } from "../BeaverUtil";
 import { deepCopy } from "../deepCopy";
 import { StockpileUtil } from "../StockpileUtil";
-import { entities } from "../allEntities";
+import { getMapEntityKind, readEntityData, writeEntityData, type EntityData, type MapEntityKind } from "../MapEntities";
+import { buildingColors, getBuildingVisual, isStockpile } from "../BuildingVisuals";
+import { ConstructionUtil } from "../ConstructionUtil";
+import { MapObjects } from "./MapObjects";
 
 import * as BufferGeometryUtils from "three/addons/utils/BufferGeometryUtils.js";
-const { TREE_ENTITIES, BEAVER_ENTITIES, PATH_ENTITIES, PLATFORM_ENTITIES, STORAGE_ENTITIES: STOCKPILE_ENTITIES } = entities;
+
 
 interface State {
   saveData: DemoSave;
@@ -29,44 +32,8 @@ interface MutableState extends State {
   selectedEntity: UnknownEntity | null;
 }
 
-interface EntityData {
-  deleteIds: string[];
-  updateIds: string[];
-  entitiesByIds: Record<string, UnknownEntity>;
-  entitiesIdsByTemplate: Record<string, string[]>;
-}
-
-const EDITABLE_ENTITIES = [
-  ...STOCKPILE_ENTITIES, ...TREE_ENTITIES, ...BEAVER_ENTITIES, ...PATH_ENTITIES,
-  ...PLATFORM_ENTITIES,
-];
-
-const useEntitiesOfTypes = (entityData: EntityData, templateIds: string[]) => {
-  const { entitiesIdsByTemplate, entitiesByIds } = entityData;
-  return useMemo(() => lodash(templateIds)
-    .map(_ => entitiesIdsByTemplate[_])
-    .flatten()
-    .map((id) => entitiesByIds[id])
-    .compact()
-    .toJSON(), [templateIds, entitiesIdsByTemplate, entitiesByIds]);
-}
-
-function readEntityData(saveData: DemoSave) {
-  return lodash(saveData.Entities)
-    .filter(_ => EDITABLE_ENTITIES.includes(_.Template))
-    .reduce((acc, entity) => {
-      acc.entitiesByIds[entity.Id] = entity;
-      if (!acc.entitiesIdsByTemplate[entity.Template]) {
-        acc.entitiesIdsByTemplate[entity.Template] = [];
-      }
-      acc.entitiesIdsByTemplate[entity.Template].push(entity.Id);
-      return acc;
-    }, {
-      deleteIds: [],
-      updateIds: [],
-      entitiesByIds: {},
-      entitiesIdsByTemplate: {}
-    } as EntityData)
+function useEntitiesOfKind(entityData: EntityData, kind: MapEntityKind) {
+  return useMemo(() => Object.values(entityData.entitiesByIds).filter(entity => getMapEntityKind(entity) === kind), [entityData, kind]);
 }
 
 export const MapPlugin: IEditorPlugin<State, State> = {
@@ -82,20 +49,7 @@ export const MapPlugin: IEditorPlugin<State, State> = {
     saveData
   }),
 
-  write: (saveData, state) => {
-    return {
-      ...saveData,
-      Entities: compact(saveData.Entities.map((entity) => {
-        if (state.entityData.deleteIds.includes(entity.Id)) {
-          return null;
-        } else if (state.entityData.updateIds.includes(entity.Id)) {
-          return state.entityData.entitiesByIds[entity.Id];
-        } else {
-          return entity;
-        }
-      }))
-    }
-  },
+  write: (saveData, state) => writeEntityData(saveData, state.entityData),
 
   Preview: ({ saveData }) => <div>
     An interactive 3D Map that will take a while to load.
@@ -106,6 +60,7 @@ export const MapPlugin: IEditorPlugin<State, State> = {
     const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
     const selectedEntity = (selectedEntityId && state.entityData.entitiesByIds[selectedEntityId]) || null;
     const { mapSizeX, mapSizeY } = state.mapData;
+    const objects = useEntitiesOfKind(state.entityData, "object");
 
     const setEntity = (entity: UnknownEntity) => {
       const oldEntity: UnknownEntity | undefined = state.entityData.entitiesByIds[entity.Id];
@@ -132,11 +87,8 @@ export const MapPlugin: IEditorPlugin<State, State> = {
     }
 
     const selectEntityId = useCallback((id: string | null) => {
-      if (selectedEntityId && id) {
-        return;
-      }
       setSelectedEntityId(id);
-    }, [selectedEntityId, setSelectedEntityId])
+    }, [])
 
     return <div className="Map__Editor">
       <Navbar onHome={onClose} />
@@ -151,13 +103,11 @@ export const MapPlugin: IEditorPlugin<State, State> = {
             <SlowBoxesHeightMap {...state} />
             <SlowBoxesWaterMap {...state} />
             <TreesMap {...state} />
-            <PlatformsMap {...state} />
-            <PathsMap {...state} />
-            <StockpilesMap {...state} selectEntityId={selectEntityId} selectedEntity={selectedEntity} setEntity={setEntity} />
+            <MapObjects entities={objects} selectedId={selectedEntityId} onSelect={selectEntityId} />
             <BeaversMap {...state} selectEntityId={selectEntityId} selectedEntity={selectedEntity} setEntity={setEntity} />
           </group>
         </group>
-        <MapControls />
+        <SceneControls selectedEntity={selectedEntity} mapData={state.mapData} />
       </Canvas>
     </div>;
   }
@@ -169,13 +119,32 @@ interface GuiProps extends MutableState {
 }
 
 function Gui(state: GuiProps) {
+  const [query, setQuery] = useState("");
+  const objects = useEntitiesOfKind(state.entityData, "object");
+  const matches = useMemo(() => query.trim() ? objects.filter(entity =>
+    `${entity.Template} ${entity.Components.NamedEntity?.EntityName ?? ""}`.toLowerCase().includes(query.trim().toLowerCase())
+  ).slice(0, 8) : [], [objects, query]);
   if (!state.selectedEntity) {
     return <div className="Map__Gui">
       <div className="Map__Gui__Right p-4">
         <div className="card">
           <div className="card-body">
             <h4 className="card-title">Map Editor</h4>
-            <p>A 3D view of the map. Red bars are beavers. Red boxes are warehouses. Click a red thing to edit. Use mouse to navigate camera.</p>
+            <p>Click a building to inspect it, or a storage or beaver to edit. Drag to pan, right-drag to rotate, and scroll to zoom.</p>
+            <p className="small text-muted">Buildings use simplified shapes and approximate footprints. Unknown types appear as pink blocks; yellow marks construction.</p>
+            <div className="d-flex flex-wrap gap-2 small mb-3" aria-label="Building colors">
+              {Object.entries(buildingColors).filter(([category]) => !["Plants", "Natural resources", "Other"].includes(category)).map(([category, color]) =>
+                <span key={category}><span style={{ color }}>■</span> {category}</span>)}
+            </div>
+            <label htmlFor="find-building" className="form-label small">Find building</label>
+            <input id="find-building" type="search" className="form-control form-control-sm mb-2" placeholder="e.g. Lodge, Floodgate, WindTurbine" value={query} onChange={event => setQuery(event.target.value)} />
+            {query.trim() && <div className="list-group mb-3">
+              {matches.length === 0 && <span className="small text-muted">No matching objects.</span>}
+              {matches.map(entity => {
+                const { X, Y, Z } = entity.Components.BlockObject.Coordinates;
+                return <button key={entity.Id} className="list-group-item list-group-item-action py-1 small" onClick={() => state.selectEntityId(entity.Id)}>{entity.Template} ({X}, {Y}, {Z})</button>;
+              })}
+            </div>}
             <button className="btn btn-primary btn-sm" onClick={() => state.onSubmit(state)}>Save</button>
             {" "}
             <button className="btn btn-light btn-sm" onClick={() => state.onClose()}>Discard changes</button>
@@ -190,8 +159,17 @@ function Gui(state: GuiProps) {
       <div className="card">
         <div className="card-body">
           <h4 className="card-title">{state.selectedEntity.Template}</h4>
-          {STOCKPILE_ENTITIES.includes(state.selectedEntity.Template) ? <StockpileForm {...state} /> : null}
-          {BEAVER_ENTITIES.includes(state.selectedEntity.Template) ? <BeaverForm {...state} /> : null}
+          {state.selectedEntity.Components.NamedEntity?.EntityName && <p>{state.selectedEntity.Components.NamedEntity.EntityName}</p>}
+          {state.selectedEntity.Components.BlockObject && <>
+            <p className="small">{getBuildingVisual(state.selectedEntity).category} · {ConstructionUtil.isFinished(state.selectedEntity) ? "Built" : "Under construction"}</p>
+            <p className="small">Coordinates: {Object.entries(state.selectedEntity.Components.BlockObject.Coordinates).map(([axis, value]) => `${axis}: ${value}`).join(" · ")}</p>
+            {getBuildingVisual(state.selectedEntity).fallback && <p className="small text-muted">No model is defined for this template. A block marks its saved position.</p>}
+          </>}
+          {isStockpile(state.selectedEntity) && ConstructionUtil.isFinished(state.selectedEntity)
+            ? <StockpileForm key={state.selectedEntity.Id} {...state} />
+            : getMapEntityKind(state.selectedEntity) === "character" && /^Beaver/.test(state.selectedEntity.Template)
+              ? <BeaverForm key={state.selectedEntity.Id} {...state} />
+              : <button className="btn btn-light btn-sm" onClick={() => state.selectEntityId(null)}>Close inspection</button>}
         </div>
       </div>
     </div>
@@ -231,87 +209,8 @@ function BeaverForm({ selectedEntity, selectEntityId, setEntity }: MutableState)
   </form>
 }
 
-function StockpilesMap({ entityData, selectEntityId, selectedEntity }: MutableState) {
-  const stockpiles = useEntitiesOfTypes(entityData, STOCKPILE_ENTITIES)
-
-  return <group>
-    {stockpiles.map((stockpile) => <Stockpile selected={selectedEntity === stockpile}
-      key={stockpile.Id} stockpile={stockpile} selectEntityId={selectEntityId} />)}
-  </group>
-}
-
-function Stockpile({ stockpile, selectEntityId, selected }: { selected: boolean, stockpile: UnknownEntity, selectEntityId: (id: string) => void }) {
-  const [isHover, setIsHover] = useState(false);
-
-  const onClick = () => { selectEntityId(stockpile.Id); }
-  const onPointerEnter = () => { setIsHover(true); }
-  const onPointerLeave = () => { setIsHover(false); }
-
-  const pos = stockpile.Components.BlockObject.Coordinates;
-  const x: number = pos.X;
-  const y: number = pos.Z;
-  const z: number = pos.Y;
-
-  const meshRef = useRef<Mesh>(null);
-  const template = stockpile.Template;
-
-  useLayoutEffect(() => {
-    if (!meshRef.current) {
-      return;
-    }
-    let sizeX = 3;
-    let sizeY = 1;
-    let sizeZ = 2;
-    let geom: BufferGeometry | null = null;
-
-    if (/SmallWarehouseNew|SmallPile/.test(template) || (/SmallWarehouse/.test(template) && StockpileUtil.getCapacity(stockpile) === 30)) {
-      sizeX = 1;
-      sizeZ = 1;
-      sizeY = 1;
-    } else if (/UndergroundWarehouse/.test(template)) {
-      sizeZ = 3;
-      sizeY = 3;
-    } else if (/Log/.test(template)) {
-      sizeZ = 3;
-      sizeY = 0.1;
-    } else if (/LargeWarehouse/.test(template)) {
-      sizeZ = 3;
-
-      geom = BufferGeometryUtils.mergeGeometries([
-        new BoxGeometry(sizeX, sizeY, sizeZ, 1.0, 1.0),
-        new BoxGeometry(1, sizeY, sizeZ, 1.0, 1.0).translate(0, 1, 0),
-      ])
-    } else if (/LargeWaterTank/.test(template)) {
-      sizeY = 3
-      geom = BufferGeometryUtils.mergeGeometries([
-        new CylinderGeometry(1.0, 1.0, sizeY, 8, 8, false).translate(0.5, 0, 0),
-        new BoxGeometry(2, 1, 1, 1.0, 1.0).translate(-0.5, -1, 0.5),
-      ])
-    }
-
-    if (!geom) {
-      geom = new BoxGeometry(sizeX, sizeY, sizeZ, 1.0, 1.0);
-    }
-
-    if (isHover || selected) {
-      geom.scale(1.0 + 0.1 / sizeX, 1.0 + 0.1 / sizeY, 1.0 + 0.1 / sizeZ);
-    }
-
-    geom.translate(sizeX / 2 - 0.5, sizeY / 2, sizeZ / 2 - 0.5);
-    rotate(geom, stockpile);
-
-    meshRef.current.geometry.dispose();
-    meshRef.current.geometry = geom;
-    return () => geom?.dispose();
-  }, [stockpile, template, selected, isHover]);
-
-  return <mesh ref={meshRef} onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave} onClick={onClick} key={stockpile.Id} position={[x, y, z]}>
-    <meshStandardMaterial opacity={0.9} transparent color={selected ? "#651FFF" : (isHover ? "#FF8A65" : "#E64A19")} />
-  </mesh>;
-}
-
 function BeaversMap({ entityData, selectEntityId, selectedEntity }: MutableState) {
-  const beavers = useEntitiesOfTypes(entityData, BEAVER_ENTITIES)
+  const beavers = useEntitiesOfKind(entityData, "character")
 
   return <group>
     {beavers.map((beaver) => <Beaver selected={selectedEntity === beaver} key={beaver.Id}
@@ -322,7 +221,7 @@ function BeaversMap({ entityData, selectEntityId, selectedEntity }: MutableState
 function Beaver({ beaver, selectEntityId, selected }: { selected: boolean, beaver: UnknownEntity, selectEntityId: (id: string) => void }) {
   const [isHover, setIsHover] = useState(false);
 
-  const onClick = () => { selectEntityId(beaver.Id); }
+  const onClick = (event: { stopPropagation: () => void }) => { event.stopPropagation(); selectEntityId(beaver.Id); }
   const onPointerEnter = () => { setIsHover(true); }
   const onPointerLeave = () => { setIsHover(false); }
 
@@ -405,81 +304,8 @@ function meshWithColorFromGeoms(geometries: any[], color: string, opacity: numbe
   return new Mesh(geom, mat);
 }
 
-function getEntityRotationY(entity: UnknownEntity): number {
-  const orientation = entity.Components.BlockObject.Orientation;
-  const orientationMatch = (typeof orientation === "string" ? orientation : orientation?.Value)?.match(/Cw(\d+)/);
-  if (orientationMatch) {
-    return parseFloat(orientationMatch[1]) / 180 * Math.PI;
-  } else {
-    return 0
-  }
-}
-
-function rotate(geom: BufferGeometry, entity: UnknownEntity) {
-  return geom.rotateY(getEntityRotationY(entity));
-}
-
-function PathsMap({ entityData }: State) {
-  const paths = useEntitiesOfTypes(entityData, PATH_ENTITIES);
-  const mesh = useMemo(() => meshWithColorFromGeoms(paths
-    .map((_: any) => {
-      let geom: BufferGeometry | null = null;
-      if (/Slope|Stairs/.test(_.Template)) {
-        geom = new PlaneGeometry(1, 1.44, 1, 1).rotateX(-Math.PI / 4).translate(0, 0.6, 0)
-        geom = rotate(geom, _);
-      } else if (/DistrictGate/.test(_.Template)) {
-        geom = BufferGeometryUtils.mergeGeometries([
-          new PlaneGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.1, 0),
-          rotate(new BoxGeometry(0.8, 1, 0.1, 1, 1, 1).translate(0, 0.5, 0), _),
-        ])
-      } else {
-        geom = new PlaneGeometry(1, 1, 1, 1).rotateX(-Math.PI / 2).translate(0, 0.1, 0)
-      }
-
-      return geom ? geom.translate(
-        _.Components.BlockObject.Coordinates.X,
-        _.Components.BlockObject.Coordinates.Z,
-        _.Components.BlockObject.Coordinates.Y
-      ) : null;
-    }).filter(_ => _), "#BCAAA4", 0.8), [paths]);
-
-  useEffect(() => () => disposeMesh(mesh), [mesh]);
-  return <primitive object={mesh} />;
-}
-
-function PlatformsMap({ entityData }: State) {
-  const paths = useEntitiesOfTypes(entityData, PLATFORM_ENTITIES);
-  const geom = useMemo(() => meshWithColorFromGeoms(paths
-    .map((_: any) => {
-      let geom: BufferGeometry | null = null;
-      let height = 1;
-      if (/DoublePlatform/.test(_.Template)) {
-        height = 2;
-      } else if (/TriplePlatform/.test(_.Template)) {
-        height = 3;
-      }
-      height -= 0.05;
-      geom = BufferGeometryUtils.mergeGeometries([
-        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(-0.4, height / 2, -0.4),
-        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(0.4, height / 2, 0.4),
-        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(0.4, height / 2, -0.4),
-        new BoxGeometry(0.1, height, 0.1, 1, 1, 1).translate(-0.4, height / 2, 0.4),
-        new BoxGeometry(0.95, 0.05, 0.95, 1, 1, 1).translate(0, height + 0.025, 0),
-      ]);
-
-      return geom ? geom.translate(
-        _.Components.BlockObject.Coordinates.X,
-        _.Components.BlockObject.Coordinates.Z,
-        _.Components.BlockObject.Coordinates.Y
-      ) : null;
-    }).filter(_ => _), "#A1887F"), [paths]);
-
-  useEffect(() => () => disposeMesh(geom), [geom]);
-  return <primitive object={geom} />;
-}
-
 function TreesMap({ entityData }: State) {
-  const treeEntities = useEntitiesOfTypes(entityData, TREE_ENTITIES);
+  const treeEntities = useEntitiesOfKind(entityData, "tree");
 
   const { greenTrees, brownTrees } = useMemo(() => {
     const trees = treeEntities.map((_: any) => ({
@@ -524,11 +350,27 @@ function SlowBoxesWaterMap({ mapData }: State) {
 function SlowBoxesHeightMap({ mapData }: State) {
   const geometry = useMemo(() => createTerrainGeometry(mapData), [mapData]);
   useEffect(() => () => geometry.dispose(), [geometry]);
-  return <mesh geometry={geometry}><meshStandardMaterial vertexColors /></mesh>;
+  return <mesh geometry={geometry} onClick={event => event.stopPropagation()}><meshStandardMaterial vertexColors /></mesh>;
 }
 
 function disposeMesh(mesh: Mesh) {
   mesh.geometry.dispose();
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   materials.forEach(material => material.dispose());
+}
+
+function SceneControls({ selectedEntity, mapData }: { selectedEntity: UnknownEntity | null; mapData: MapData }) {
+  const controls = useRef<ComponentRef<typeof MapControls>>(null);
+  const { camera } = useThree();
+  useEffect(() => {
+    const coordinates = selectedEntity?.Components.BlockObject?.Coordinates;
+    if (!coordinates || !controls.current) return;
+    const x = coordinates.X - mapData.mapSizeX / 2;
+    const y = coordinates.Z + 1;
+    const z = mapData.mapSizeY / 2 - coordinates.Y;
+    controls.current.target.set(x, y, z);
+    camera.position.set(x + 12, y + 16, z - 12);
+    controls.current.update();
+  }, [selectedEntity?.Id, mapData, camera]);
+  return <MapControls ref={controls} />;
 }
