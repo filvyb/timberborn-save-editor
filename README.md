@@ -5,6 +5,7 @@ A fork of [charperbonaroo/timberborn-save-editor](https://github.com/charperbona
 ## Changes in this fork
 
 - Timberborn 1.1 saves, inventories, construction, beavers and voxel maps.
+- Drag and drop a `.timber` or `.json` save, or open it with the file picker.
 - Schematic 3D buildings, building search and inspection, and markers for unknown types.
 - Easy, Normal and Hard difficulty presets.
 - Export preserves metadata, thumbnails and unknown save data.

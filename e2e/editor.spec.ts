@@ -1,8 +1,72 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import JSZip from "jszip";
+import { modernSave } from "../src/__tests__/fixtures";
 
 const savePath = "saves/Larpago.timber";
+
+async function dragFiles(page: Page, files: { name: string; bytes: number[] }[]) {
+  return page.evaluateHandle(files => {
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(new File([new Uint8Array(file.bytes)], file.name));
+    return transfer;
+  }, files);
+}
+
+for (const extension of ["json", "timber"]) {
+  test(`opens a dropped .${extension} save`, async ({ page }) => {
+    const json = JSON.stringify(modernSave());
+    const bytes = extension === "json"
+      ? Buffer.from(json)
+      : await new JSZip().file("world.json", json).generateAsync({ type: "nodebuffer" });
+    await page.goto("/");
+    const dataTransfer = await dragFiles(page, [{ name: `dropped.${extension}`, bytes: [...bytes] }]);
+    const dropZone = page.getByRole("region", { name: "Drop a save file" });
+    await dropZone.dispatchEvent("dragenter", { dataTransfer });
+    await expect(dropZone).toHaveClass(/is-dragging/);
+    const input = page.getByLabel("Open a save file");
+    await input.dispatchEvent("dragenter", { dataTransfer });
+    await dropZone.dispatchEvent("dragleave", { dataTransfer });
+    await expect(dropZone).toHaveClass(/is-dragging/);
+    await input.dispatchEvent("dragleave", { dataTransfer });
+    await expect(dropZone).not.toHaveClass(/is-dragging/);
+    await dropZone.dispatchEvent("dragenter", { dataTransfer });
+    const acceptsDrop = await input.evaluate((element, dataTransfer) => {
+      const event = new DragEvent("dragover", { dataTransfer, bubbles: true, cancelable: true });
+      element.dispatchEvent(event);
+      return event.defaultPrevented;
+    }, dataTransfer);
+    expect(acceptsDrop).toBe(true);
+    await input.dispatchEvent("drop", { dataTransfer });
+    await expect(page.getByText(/Timberborn 1.1.2.4/)).toBeVisible();
+    await page.getByRole("button", { name: /^Properties/ }).click();
+    await expect(page.getByLabel("Science", { exact: true })).toHaveValue("4170");
+    await dataTransfer.dispose();
+  });
+}
+
+test("rejects multiple or invalid dropped files and can recover", async ({ page }) => {
+  await page.goto("/");
+  const dropZone = page.getByRole("region", { name: "Drop a save file" });
+  const badFile = { name: "bad.json", bytes: [...Buffer.from('{"Cycle":1}')] };
+  for (const [files, error] of [
+    [[badFile, badFile], "Drop one save file at a time."],
+    [[{ ...badFile, name: "bad.txt" }], "Choose a .timber or .json save file."],
+    [[badFile], "not a Timberborn world save"],
+  ] as const) {
+    const dataTransfer = await dragFiles(page, [...files]);
+    await dropZone.dispatchEvent("dragenter", { dataTransfer });
+    await dropZone.dispatchEvent("drop", { dataTransfer });
+    await expect(page.getByRole("alert")).toContainText(error);
+    await expect(dropZone).not.toHaveClass(/is-dragging/);
+    await expect(page.getByLabel("Open a save file")).toBeEnabled();
+    await dataTransfer.dispose();
+  }
+  const dataTransfer = await dragFiles(page, [{ name: "recovered.json", bytes: [...Buffer.from(JSON.stringify(modernSave()))] }]);
+  await dropZone.dispatchEvent("drop", { dataTransfer });
+  await expect(page.getByRole("button", { name: /Beaver copier/ })).toBeVisible();
+  await dataTransfer.dispose();
+});
 
 test("invalid uploads show a useful error and the file input can recover", async ({ page }) => {
   await page.goto("/");

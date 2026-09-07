@@ -1,0 +1,9 @@
+.save-drop-zone {
+  border: 2px dashed var(--bs-border-color);
+  background-color: var(--bs-tertiary-bg);
+}
+
+.save-drop-zone.is-dragging {
+  border-color: var(--bs-primary);
+  background-color: var(--bs-primary-bg-subtle);
+}
