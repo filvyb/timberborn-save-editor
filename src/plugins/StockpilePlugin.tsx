@@ -136,6 +136,9 @@ function StockpileForm({ stockpile, setStockpile }: { stockpile: UnknownEntity, 
 }
 
 function StockpileButton({ stockpile, setStockpileId }: { stockpile: UnknownEntity, setStockpileId: (id: string) => void }) {
+  const counts = StockpileUtil.countGoods(stockpile,
+    Object.fromEntries(StockpileUtil.getAllowedGoods(stockpile).map(good => [good, 0])));
+
   return <button onClick={() => setStockpileId(stockpile.Id)} className="list-group-item list-group-item-action">
     <div className="d-flex">
       <div>
@@ -146,7 +149,7 @@ function StockpileButton({ stockpile, setStockpileId }: { stockpile: UnknownEnti
           z: <b>{Math.round(stockpile.Components.BlockObject.Coordinates.Z)}</b>{" "}
         </div>
       </div>
-      <StockpileInventoryTable counts={StockpileUtil.countGoods(stockpile)} />
+      <StockpileInventoryTable counts={counts} />
     </div>
   </button>;
 }
