@@ -44,9 +44,11 @@ export const BeaverCopier: IEditorPlugin<DemoSave, DemoSave> = {
     }, [beavers, setBeavers, copyBeaver]);
 
     const doSubmit = useCallback(() => {
+      const beaversById = new Map(beavers.map(beaver => [beaver.Id, beaver]));
+      const originalIds = new Set(initialData.Entities.map(entity => entity.Id));
       const Entities = initialData.Entities
-        .filter(_ => _.Template !== "BeaverChild" && _.Template !== "BeaverAdult")
-        .concat(beavers);
+        .map(entity => beaversById.get(entity.Id) ?? entity)
+        .concat(beavers.filter(beaver => !originalIds.has(beaver.Id)));
 
       onSubmit({ ...initialData, Entities });
     }, [onSubmit, beavers, initialData]);

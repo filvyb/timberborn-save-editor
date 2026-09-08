@@ -117,6 +117,8 @@ test("renders visible zipline cables between the selected pylons", async ({ page
 
 test("edits and exports a supplied 1.1 save and opens its voxel map", async ({ page }) => {
   test.skip(!existsSync(savePath), "Place the local v1.1 example in saves/Larpago.timber to run this test.");
+  const originalArchive = await JSZip.loadAsync(readFileSync(savePath));
+  const originalWorld = JSON.parse(await originalArchive.file("world.json")!.async("string"));
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto("/");
@@ -155,12 +157,12 @@ test("edits and exports a supplied 1.1 save and opens its voxel map", async ({ p
   const path = await download.path();
   const zip = await JSZip.loadAsync(readFileSync(path!));
   const world = JSON.parse(await zip.file("world.json")!.async("string"));
-  expect(world.GameVersion).toBe("1.1.2.4-52e959e-sw");
+  expect(world.GameVersion).toBe(originalWorld.GameVersion);
   expect(world.Singletons.ScienceService.SciencePoints).toBe(9000);
   expect(world.Singletons.DroughtWeather).toMatchObject({ MinDroughtDuration: 15, MaxDroughtDuration: 30, HandicapMultiplier: 0.2, HandicapCycles: 12 });
   expect(world.Singletons.BadtideWeather).toMatchObject({ HandicapMultiplier: 0.4, HandicapCycles: 9 });
   expect(world.Singletons.NeedModificationService.FoodConsumption).toBe(1);
-  expect(world.Singletons.GameCycleService).toEqual({ Cycle: 17, CycleDay: 14 });
+  expect(world.Singletons.GameCycleService).toEqual(originalWorld.Singletons.GameCycleService);
   expect(world.Entities.filter((entity: any) => entity.Components.BlockObjectState?.Finished === false)).toHaveLength(0);
   expect(world.Entities.some((entity: any) => entity.Components.NamedEntity?.EntityName === "Test beaver")).toBe(true);
   expect(zip.file("save_thumbnail.jpg")).not.toBeNull();
@@ -170,7 +172,7 @@ test("edits and exports a supplied 1.1 save and opens its voxel map", async ({ p
   await expect(page.locator("canvas")).toBeVisible({ timeout: 60000 });
   await expect(page.getByRole("heading", { name: "Map Editor", exact: true })).toBeVisible();
   // Wait for real WebGL rendering, including shader compilation.
-  await expect.poll(() => page.locator("canvas").evaluate(canvas => {
+  await expect.poll(() => page.locator("canvas").evaluate((canvas: HTMLCanvasElement) => {
     const gl = canvas.getContext("webgl2");
     return gl !== null && gl.drawingBufferWidth > 0;
   })).toBe(true);

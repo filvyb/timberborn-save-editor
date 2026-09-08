@@ -1,70 +1,71 @@
-import { test, expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import JSZip from "jszip";
-import { modernSave } from "../src/__tests__/fixtures";
+import { test, expect, type Page } from "@playwright/test";
+import { generatedWorld, uploadWorld, downloadArchive, expectExport } from "./save-helpers";
+import type { DemoSave } from "../src/DemoSave";
 
-const changes = [
-  { label: "Science", service: "ScienceService", key: "SciencePoints", value: 9000 },
-  { label: "Max drought duration", service: "DroughtWeather", key: "MaxDroughtDuration", value: 9 },
-  { label: "Badtide chance", service: "BadtideWeather", key: "ChanceBadtideWeather", value: 0.65 },
-];
+interface EditScenario {
+  label: string;
+  updateExpected: (world: Pick<DemoSave, "Singletons" | "Entities">) => void;
+  edit: (page: Page) => Promise<void>;
+}
 
-for (const extension of ["json", "timber"]) {
-  for (const { label, service, key, value } of changes) {
-    test(`changing only ${label} preserves all other data from a .${extension} save`, async ({ page }) => {
-      // Generate the input independently of the app's serializer and any local save files.
-      const { __originalFilename, __archive, ...original } = modernSave();
-      original.UnknownRoot = { ModData: ["keep", { Enabled: true }] };
-      original.Singletons[service].UnknownSetting = { Keep: [1, "two", null] };
-      const json = JSON.stringify(original);
-      const archive = new JSZip()
-        .file("world.json", json)
-        .file("save_metadata.json", JSON.stringify({
-          Cycle: original.Singletons.GameCycleService.Cycle,
-          Day: original.Singletons.GameCycleService.CycleDay,
-          Mods: [{ Name: "Example mod", Settings: { Enabled: true } }],
-        }, null, 2))
-        .file("save_thumbnail.jpg", new Uint8Array([255, 216, 255, 217]))
-        .file("version.txt", `${original.GameVersion}\r\n`)
-        .file("mods/unknown.bin", new Uint8Array([0, 1, 128, 255]));
-      const buffer = extension === "json"
-        ? Buffer.from(json)
-        : await archive.generateAsync({ type: "nodebuffer" });
-      const expected = structuredClone(original);
-      expect(expected.Singletons[service][key]).not.toBe(value);
-      expected.Singletons[service][key] = value;
-
-      await page.goto("/");
-      await page.getByLabel("Open a save file").setInputFiles({
-        name: `generated.${extension}`,
-        mimeType: extension === "json" ? "application/json" : "application/zip",
-        buffer,
-      });
+const changes: EditScenario[] = [
+  ...[
+    { label: "Science", service: "ScienceService", key: "SciencePoints", value: 9000 },
+    { label: "Max drought duration", service: "DroughtWeather", key: "MaxDroughtDuration", value: 9 },
+    { label: "Badtide chance", service: "BadtideWeather", key: "ChanceBadtideWeather", value: 0.65 },
+  ].map(({ label, service, key, value }): EditScenario => ({
+    label,
+    updateExpected(world) {
+      expect(world.Singletons[service][key]).not.toBe(value);
+      world.Singletons[service][key] = value;
+    },
+    async edit(page) {
       await page.getByRole("button", { name: /^Properties/ }).click();
       await page.getByLabel(label, { exact: true }).fill(String(value));
-      await page.getByRole("button", { name: "Submit", exact: true }).click();
-      await page.getByRole("button", { name: /^Download/ }).click();
-      const downloadPromise = page.waitForEvent("download");
-      await page.getByRole("link", { name: "Download", exact: true }).click();
-      const download = await downloadPromise;
-      const path = await download.path();
-      expect(path).not.toBeNull();
-      const exported = await JSZip.loadAsync(readFileSync(path!));
+    },
+  })),
+  {
+    label: "one stockpile quantity",
+    updateExpected(world) {
+      world.Entities.find(entity => entity.Id === "storage")!
+        .Components["Inventory:Stockpile"].Storage.Goods[0].Amount = 12;
+    },
+    async edit(page) {
+      await page.getByRole("button", { name: /Manage stockpile inventories/ }).click();
+      await page.getByRole("button", { name: /SmallPile.Folktails/ }).first().click();
+      await page.getByLabel("Log", { exact: true }).fill("12");
+      await page.getByRole("button", { name: "OK", exact: true }).click();
+    },
+  },
+  ...["Original", "Original kit"].map((name): EditScenario => ({
+    label: `${name} beaver name`,
+    updateExpected(world) {
+      world.Entities.find(entity => entity.Components.NamedEntity?.EntityName === name)!
+        .Components.NamedEntity.EntityName = "Renamed beaver";
+    },
+    async edit(page) {
+      await page.getByRole("button", { name: /Beaver copier/ }).click();
+      await page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) })
+        .getByRole("button", { name: "Edit", exact: true }).click();
+      await page.getByLabel("Name", { exact: true }).fill("Renamed beaver");
+      await page.getByRole("button", { name: "Update", exact: true }).click();
+    },
+  })),
+];
 
-      // A whole-document comparison catches additions, deletions, and unrelated edits.
-      expect(JSON.parse(await exported.file("world.json")!.async("string"))).toEqual(expected);
-      expect(Object.keys(exported.files).sort()).toEqual(
-        extension === "timber" ? Object.keys(archive.files).sort() : ["world.json"],
-      );
-      if (extension === "timber") {
-        for (const [name, entry] of Object.entries(archive.files)) {
-          expect(exported.files[name].dir).toBe(entry.dir);
-          if (name !== "world.json" && !entry.dir) {
-            expect(await exported.file(name)!.async("uint8array"), name)
-              .toEqual(await entry.async("uint8array"));
-          }
-        }
-      }
+for (const extension of ["json", "timber"] as const) {
+  for (const { label, updateExpected, edit } of changes) {
+    test(`changing only ${label} preserves all other data from a .${extension} save`, async ({ page }) => {
+      const original = generatedWorld();
+      const expected = structuredClone(original);
+      updateExpected(expected);
+      expect(expected).not.toEqual(original);
+
+      const archive = await uploadWorld(page, original, extension);
+      await edit(page);
+      await page.getByRole("button", { name: "Submit", exact: true }).click();
+      const exported = await downloadArchive(page);
+      await expectExport(exported.archive, expected, archive, extension);
     });
   }
 }
