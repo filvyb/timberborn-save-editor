@@ -10,7 +10,6 @@ A fork of [charperbonaroo/timberborn-save-editor](https://github.com/charperbona
 - Easy, Normal and Hard difficulty presets.
 - Export preserves metadata, thumbnails and unknown save data.
 - React 19, TypeScript, Vite and npm; updated dependencies.
-- Regression tests, browser tests and automatic GitHub Pages deployment.
 
 Keep your original save as a backup. Tested with 1.1.2.4 saves and legacy examples.
 
@@ -30,6 +29,3 @@ npx playwright install chromium
 npm run test:e2e                  # Browser tests
 ```
 
-## Deployment
-
-Set **Settings → Pages → Source** to **GitHub Actions**. Pushes to the default branch deploy after tests and builds pass on Node 22 and 24.

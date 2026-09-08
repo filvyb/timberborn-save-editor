@@ -106,6 +106,6 @@ export function LoadSaveCard({ onSaveLoaded }: { onSaveLoaded: (save: DemoSave) 
       <button disabled={loading} className="btn btn-link" onClick={() => loadExample("iron-teeth")}>Iron Teeth · Plains</button>
       <button disabled={loading} className="btn btn-link" onClick={() => loadExample("lets-play")}>Folktails · Plains</button>
     </div></div>
-    <p className="text-muted small mt-3">Unofficial editor, originally by Charper Bonaroo BV. Not affiliated with Mechanistry. <a href="https://github.com/charperbonaroo/timberborn-save-editor">Source code</a></p>
+    <p className="text-muted small mt-3">Unofficial editor, originally by Charper Bonaroo BV. Forked by Filip Vybihal. <a href="https://github.com/filvyb/timberborn-save-editor">Source code</a></p>
   </main>;
 }

@@ -5,6 +5,7 @@ import type { UnknownEntity } from "../DemoSave";
 import { buildingColors, getBuildingVisual, type BuildingVisual } from "../BuildingVisuals";
 import { createBuildingGeometry, getBuildingMatrix } from "../BuildingGeometry";
 import { ConstructionUtil } from "../ConstructionUtil";
+import { ZiplineCables } from "./ZiplineCables";
 
 interface Props {
   entities: UnknownEntity[];
@@ -27,6 +28,7 @@ export function MapObjects({ entities, selectedId, onSelect }: Props) {
     return [...batches.entries()];
   }, [entities]);
   return <group name="map-objects">
+    <ZiplineCables entities={entities} selectedId={selectedId} />
     {groups.map(([key, batch]) => <ObjectBatch key={key} {...batch} selectedId={selectedId} onSelect={onSelect} />)}
   </group>;
 }

@@ -13,6 +13,7 @@ import { StockpileUtil } from "../StockpileUtil";
 import { BeaverUtil } from "../BeaverUtil";
 import { getPresetValues } from "../DifficultyPresets";
 import { updateProperties } from "../PropertiesUtil";
+import { getZiplineConnections } from "../Ziplines";
 
 const directory = resolve("saves");
 const files = existsSync(directory) ? readdirSync(directory).filter(name => /\.timber$/i.test(name)) : [];
@@ -34,6 +35,14 @@ describe.skipIf(files.length === 0)("local Timberborn 1.1 example saves", () => 
       if (name !== "world.json" && !file.dir) expect(await unmodified.file(name)!.async("uint8array")).toEqual(await file.async("uint8array"));
     }
     const mapEntities = readEntityData(save);
+    const ziplinePairs = new Set(save.Entities.flatMap(entity =>
+      (entity.Components.ZiplineTower?.ConnectionTargets ?? []).map((target: string) => JSON.stringify([entity.Id, target].sort()))));
+    const ziplines = getZiplineConnections(save.Entities);
+    expect(ziplines).toHaveLength(ziplinePairs.size);
+    for (const connection of ziplines) {
+      expect(ziplinePairs.has(JSON.stringify([connection.sourceId, connection.targetId].sort()))).toBe(true);
+      expect([...connection.start.toArray(), ...connection.end.toArray()].every(Number.isFinite)).toBe(true);
+    }
     expect(Object.keys(mapEntities.entitiesByIds)).toHaveLength(save.Entities.length);
     expect(writeEntityData(save, mapEntities)).toEqual(save);
     const templates = new Map(save.Entities.filter(entity => entity.Components.BlockObject).map(entity => [entity.Template, entity]));
