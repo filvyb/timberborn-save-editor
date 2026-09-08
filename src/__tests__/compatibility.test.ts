@@ -73,6 +73,23 @@ describe("inventories", () => {
     expect(StockpileUtil.getCapacity(storage("Log", "SmallWarehouse.Folktails"))).toBe(30);
     expect(StockpileUtil.getCapacity(storage({ Id: "Log" }, "SmallWarehouse.Folktails"))).toBe(200);
   });
+  it.each(["Folktails", "IronTeeth"])("enforces current large storage limits for %s", faction => {
+    for (const [template, good, capacity] of [
+      ["LargeWarehouse", "Potato", 1200],
+      ["LargeTank", "Water", 1200],
+      ["UndergroundPile", "Log", 1000],
+    ] as const) {
+      const original = storage(good, `${template}.${faction}`);
+      expect(StockpileUtil.countGoods(StockpileUtil.setGoods(original, { [good]: capacity }))).toEqual({ [good]: capacity });
+      expect(() => StockpileUtil.setGoods(original, { [good]: capacity + 1 })).toThrow(`Inventory exceeds capacity (${capacity}).`);
+    }
+  });
+  it("uses current warehouse capacity even without an assigned good", () => {
+    const entity = storage("Potato", "LargeWarehouse.Folktails");
+    delete entity.Components.SingleGoodAllower.AllowedGood;
+    delete entity.Components["Inventory:Stockpile"];
+    expect(StockpileUtil.getCapacity(entity)).toBe(1200);
+  });
   it("recognizes empty current storages without a serialized inventory", () => {
     const entity = storage(); delete entity.Components["Inventory:Stockpile"];
     const save = modernSave(); save.Entities = [entity];

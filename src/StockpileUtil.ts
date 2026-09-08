@@ -53,9 +53,9 @@ const stockpileTypes = [{
 }];
 
 const modernCapacities: Record<string, number> = {
-  SmallWarehouse: 30, MediumWarehouse: 200, LargeWarehouse: 1000,
+  SmallWarehouse: 30, MediumWarehouse: 200, LargeWarehouse: 1200,
   SmallTank: 30, MediumTank: 300, LargeTank: 1200,
-  SmallPile: 20, LargePile: 180, UndergroundPile: 1800,
+  SmallPile: 20, LargePile: 180, UndergroundPile: 1000,
 };
 for (const faction of ["Folktails", "IronTeeth"]) {
   for (const [name, capacity] of Object.entries(modernCapacities)) {
@@ -72,7 +72,8 @@ export const StockpileUtil = {
   stockpileIds: stockpileTypes.map(type => type.id),
   goodId,
   getCapacity: (stockpile: UnknownEntity): number | undefined => {
-    if (typeof stockpile.Components.SingleGoodAllower?.AllowedGood === "string") {
+    const allower = stockpile.Components.SingleGoodAllower;
+    if (allower && (allower.AllowedGood == null || typeof allower.AllowedGood === "string")) {
       return modernCapacities[stockpile.Template.split(".")[0]];
     }
     return stockpileTypes.find(type => type.id === stockpile.Template)?.capacity;
