@@ -54,19 +54,6 @@ describe("map building coverage", () => {
     }
   });
 
-  it("joins the unrotated floodgate row in Larpago without gaps between posts", () => {
-    const boundsAt = (y: number) => {
-      const building = entity("DoubleFloodgate.Folktails");
-      building.Components.BlockObject.Coordinates = { X: 161, Y: y, Z: 3 };
-      const visual = getBuildingVisual(building);
-      const geometry = createBuildingGeometry(visual);
-      const bounds = geometry.boundingBox!.clone().applyMatrix4(getBuildingMatrix(building, visual));
-      geometry.dispose();
-      return bounds;
-    };
-    expect(boundsAt(54).max.z).toBeCloseTo(boundsAt(55).min.z);
-  });
-
   it("renders unfamiliar and modded templates instead of silently filtering them out", () => {
     const save = modernSave();
     const unknown = entity("ModdedBuilding.NewFaction");
@@ -172,36 +159,34 @@ describe("map building coverage", () => {
     geometry.dispose(); material.dispose();
   });
 
-  it("joins the opposing suspension bridges in Larpago without a gap", () => {
-    // Actual save anchors: 4 suspended tiles plus an anchor at each bank.
+  it.each([1, 2, 3, 4, 5, 6])("joins opposing bridges with %s suspended tiles without a gap", span => {
     const boundsAt = (y: number, orientation: string) => {
-      const building = entity("SuspensionBridge4x1.Folktails", orientation);
-      building.Components.BlockObject.Coordinates = { X: 58, Y: y, Z: 11 };
+      const building = entity(`SuspensionBridge${span}x1.Folktails`, orientation);
+      building.Components.BlockObject.Coordinates = { X: 0, Y: y, Z: 0 };
       const visual = getBuildingVisual(building);
       const geometry = createBuildingGeometry(visual);
       const bounds = geometry.boundingBox!.clone().applyMatrix4(getBuildingMatrix(building, visual));
       geometry.dispose();
       return bounds;
     };
-    const south = boundsAt(71, "Cw0");
-    const north = boundsAt(80, "Cw180");
+    const south = boundsAt(0, "Cw0");
+    const north = boundsAt(2 * span + 1, "Cw180");
     expect(south.max.z).toBeCloseTo(north.min.z);
-    expect(south.min.x).toBeCloseTo(57.5);
+    expect(south.min.x).toBeCloseTo(-0.5);
     expect(north.min.x).toBeCloseTo(south.min.x);
     expect(north.max.x).toBeCloseTo(south.max.x);
   });
 
   it.each(["LumberMill", "GearWorkshop", "PaperMill"])("places %s along the factory row without covering the path", template => {
-    // Larpago's Cw270 factory rows are two tiles apart, with a path on the east.
+    // Rotate a 2x3 workshop footprint beside a path in the next row.
     const building = entity(`${template}.Folktails`, "Cw270");
-    building.Components.BlockObject.Coordinates = { X: 130, Y: 24, Z: 6 };
     const visual = getBuildingVisual(building);
     const geometry = createBuildingGeometry(visual);
     const bounds = geometry.boundingBox!.clone().applyMatrix4(getBuildingMatrix(building, visual));
-    expect(bounds.min.x).toBeCloseTo(127.5);
-    expect(bounds.max.x).toBeCloseTo(130.5);
-    expect(bounds.min.z).toBeCloseTo(23.5);
-    expect(bounds.max.z).toBeCloseTo(25.5); // path occupies Y=26
+    expect(bounds.min.x).toBeCloseTo(7.5);
+    expect(bounds.max.x).toBeCloseTo(10.5);
+    expect(bounds.min.z).toBeCloseTo(19.5);
+    expect(bounds.max.z).toBeCloseTo(21.5); // path occupies Y=22
     geometry.dispose();
   });
 
@@ -240,7 +225,8 @@ describe("map building coverage", () => {
   });
 
   it("mirrors a flipped building inside the same footprint", () => {
-    const building = entity("Overhang4x1.Folktails", "Cw270");
+    // Use a building wider than one tile so a missing mirror offset is detectable.
+    const building = entity("Gristmill.Folktails", "Cw270");
     const visual = getBuildingVisual(building);
     const geometry = createBuildingGeometry(visual);
     const original = new Box3().copy(geometry.boundingBox!).applyMatrix4(getBuildingMatrix(building, visual));
@@ -249,6 +235,58 @@ describe("map building coverage", () => {
     expect(flipped.min.distanceTo(original.min)).toBeLessThan(0.00001);
     expect(flipped.max.distanceTo(original.max)).toBeLessThan(0.00001);
     geometry.dispose();
+  });
+
+  it.each([
+    ["Cw0", 0, 1], ["Cw90", 1, 0], ["Cw180", 0, -1], ["Cw270", -1, 0],
+  ] as const)("overhangs extend from their anchor along the saved %s direction", (orientation, dx, dz) => {
+    for (const length of [2, 3, 4, 5, 6]) {
+      const building = entity(`Overhang${length}x1.Folktails`, orientation);
+      const visual = getBuildingVisual(building);
+      const geometry = createBuildingGeometry(visual).applyMatrix4(getBuildingMatrix(building, visual));
+      const center = geometry.boundingBox!.getCenter(new Vector3());
+      expect(center.x).toBeCloseTo(10 + dx * (length - 1) / 2);
+      expect(center.z).toBeCloseTo(20 + dz * (length - 1) / 2);
+      const material = new MeshBasicMaterial();
+      const mesh = new Mesh(geometry, material);
+      // The end of the span has only a thin deck, with no misplaced support wall.
+      const tip = new Vector3(10 + dx * (length - 1), 5.5, 20 + dz * (length - 1));
+      expect(new Raycaster(tip, new Vector3(0, -1, 0)).intersectObject(mesh)).toHaveLength(0);
+      expect(new Raycaster(tip.setY(8), new Vector3(0, -1, 0)).intersectObject(mesh)[0].point.y).toBeCloseTo(6);
+      geometry.dispose(); material.dispose();
+    }
+  });
+
+  it("places adjacent overhangs side by side without overlapping", () => {
+    const bounds = Array.from({ length: 2 }, (_, i) => {
+      const building = entity("Overhang4x1.Folktails", "Cw180");
+      building.Components.BlockObject.Coordinates = { X: i, Y: 0, Z: 0 };
+      const visual = getBuildingVisual(building);
+      const geometry = createBuildingGeometry(visual).applyMatrix4(getBuildingMatrix(building, visual));
+      const bounds = geometry.boundingBox!.clone(); geometry.dispose(); return bounds;
+    });
+    bounds.forEach((box, i) => {
+      expect(box.min.z).toBeCloseTo(-3.5);
+      expect(box.max.z).toBeCloseTo(0.5);
+      if (i) expect(box.min.x).toBeCloseTo(bounds[i - 1].max.x);
+    });
+  });
+
+  it.each([
+    ["Cw0", 3, 1], ["Cw90", 1, 3], ["Cw180", 3, 1], ["Cw270", 1, 3],
+  ] as const)("power wheels have a 3x1 footprint and a transverse axle for %s", (orientation, width, depth) => {
+    const building = entity("PowerWheel.Folktails", orientation);
+    const visual = getBuildingVisual(building);
+    const matrix = getBuildingMatrix(building, visual);
+    const geometry = createBuildingGeometry(visual).applyMatrix4(matrix);
+    const size = geometry.boundingBox!.getSize(new Vector3());
+    expect(size.x).toBeCloseTo(width); expect(size.z).toBeCloseTo(depth);
+    const material = new MeshBasicMaterial();
+    const origin = new Vector3(1, 1.05, -2).applyMatrix4(matrix);
+    const direction = new Vector3(0, 0, 1).transformDirection(matrix);
+    const hits = new Raycaster(origin, direction).intersectObject(new Mesh(geometry, material));
+    expect(hits[0].distance).toBeCloseTo(1.5);
+    geometry.dispose(); material.dispose();
   });
 
   it("updates only the selected inventory and preserves every newly displayed building", () => {

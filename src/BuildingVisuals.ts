@@ -3,7 +3,9 @@ import { StockpileUtil } from "./StockpileUtil";
 
 export type BuildingShape = "box" | "house" | "factory" | "tank" | "pile" | "platform" | "bridge" |
   "overhang" | "stairs" | "spiral" | "wheel" | "windmill" | "shaft" | "flag" | "tower" | "observatory" | "roof" | "crop" | "source" | "gate" | "floodgate" |
-  "ziplineStation" | "ziplinePylon" | "ziplineBeam";
+  "ziplineStation" | "ziplinePylon" | "ziplineBeam" | "dome" | "brazier" | "fountain" |
+  "hall" | "mudPit" | "contemplation" | "detailer" | "discharge" | "depthSensor" | "counter" | "gristmill" |
+  "powerWheel" | "excavator";
 export type BuildingCategory = "Housing" | "Industry" | "Storage" | "Water" | "Power" | "Paths and structures" |
   "Services" | "Leisure" | "Plants" | "Natural resources" | "Other";
 export const buildingColors: Record<BuildingCategory, string> = {
@@ -29,10 +31,27 @@ const industrySizes: Record<string, BuildingVisual["size"]> = {
   Grill: [2, 3, 2], Bakery: [2, 4, 3], Refinery: [2, 4, 3],
 };
 
-// Shapes and dimensions are deliberately schematic. Save files contain placements, not building meshes.
-// Match families without a faction suffix so both factions and new variants are covered.
+const additionalVisuals: Record<string, BuildingVisual> = {
+  PowerWheel: visual("powerWheel", [3, 2, 1], "Power"),
+  DirtExcavator: visual("excavator", [5, 3, 6], "Industry"),
+  Gristmill: visual("gristmill", [3, 3, 2], "Industry"),
+  BadwaterDome: visual("dome", [3, 2, 3], "Water"),
+  BrazierOfBonding: visual("brazier", [2, 3, 2], "Leisure"),
+  FountainOfJoy: visual("fountain", [5, 3, 5], "Leisure"),
+  HallOfAbundance: visual("hall", [5, 5, 5], "Leisure"),
+  MudPit: visual("mudPit", [3, 1, 3], "Leisure"),
+  ContemplationSpot: visual("contemplation", [1, 1, 1], "Leisure"),
+  Detailer: visual("detailer", [1, 1, 2], "Leisure"),
+  Discharge: visual("discharge", [1, 2, 2], "Water"),
+  DepthSensor: visual("depthSensor", [1, 2, 2], "Services"),
+  PopulationCounter: visual("counter", [1, 2, 1], "Services"),
+  TerrainBlock: visual("box", [1, 1, 1], "Paths and structures"),
+  RecoveredGoodStack: visual("pile", [0.8, 0.5, 0.8], "Storage"),
+};
+
 export function getBuildingVisual(entity: UnknownEntity): BuildingVisual {
   const name = entity.Template.split(".")[0];
+  if (additionalVisuals[name]) return additionalVisuals[name];
   const height = /Triple/.test(name) ? 3 : /Double/.test(name) ? 2 : 1;
   const span = name.match(/(\d+)x(\d+)/);
   const width = span ? Math.min(Number(span[1]), 64) : 1;
@@ -41,10 +60,9 @@ export function getBuildingVisual(entity: UnknownEntity): BuildingVisual {
   if (/^Path$|^DistrictGate$/.test(name)) return visual("box", [1, name === "Path" ? 0.08 : 0.8, 1], "Paths and structures");
   if (/SpiralStairs/.test(name)) return visual("spiral", [1, 1, 1], "Paths and structures");
   if (/Stairs|Slope/.test(name)) return visual("stairs", [1, 1, 1], "Paths and structures");
-  // Suspension bridge names count the suspended tiles, excluding the anchor tile.
   if (/SuspensionBridge/.test(name)) return visual("bridge", [depth, 1, width + 1], "Paths and structures");
   if (/Bridge/.test(name)) return visual("bridge", [depth, 1, width], "Paths and structures");
-  if (/Overhang/.test(name)) return visual("overhang", [width, 1, depth], "Paths and structures");
+  if (/Overhang/.test(name)) return visual("overhang", [depth, 1, width], "Paths and structures");
   if (/Platform/.test(name)) return visual("platform", [/LargeMetal/.test(name) ? 5 : /Metal/.test(name) ? 3 : width, height, /LargeMetal/.test(name) ? 5 : /Metal/.test(name) ? 3 : depth], "Paths and structures");
   if (/Roof/.test(name)) return visual("roof", [width, 0.6, depth], "Leisure");
   if (/Levee|Dam$|ImpermeableFloor/.test(name)) return visual("box", [1, /Floor/.test(name) ? 0.1 : /Dam/.test(name) ? 0.65 : 1, 1], "Water");

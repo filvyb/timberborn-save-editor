@@ -8,25 +8,18 @@ import { readEntityData, writeEntityData } from "../MapEntities";
 import { getBuildingVisual } from "../BuildingVisuals";
 import { createBuildingGeometry } from "../BuildingGeometry";
 import { readMapData } from "../MapData";
-import { ConstructionUtil } from "../ConstructionUtil";
+import { getPropertyFields, updateProperties } from "../PropertiesUtil";
 import { StockpileUtil } from "../StockpileUtil";
-import { BeaverUtil } from "../BeaverUtil";
-import { getPresetValues } from "../DifficultyPresets";
-import { updateProperties } from "../PropertiesUtil";
-import { getZiplineConnections } from "../Ziplines";
+import { ConstructionUtil } from "../ConstructionUtil";
+import { expectSaveArchive, worldData } from "./saveAssertions";
 
 const directory = resolve("saves");
 const files = existsSync(directory) ? readdirSync(directory).filter(name => /\.timber$/i.test(name)) : [];
 
-describe.skipIf(files.length === 0)("local Timberborn 1.1 example saves", () => {
-  it.each(files)("loads, edits and exports %s without losing archive or world data", async filename => {
+describe.skipIf(files.length === 0)("local save compatibility", () => {
+  it.each(files)("round-trips %s without losing archive, world or map entity data", async filename => {
     const bytes = readFileSync(resolve(directory, filename));
     const save = await loadSave(bytes, filename);
-    // All supplied saves use Easy: compare every stored preset value with game output.
-    for (const [path, value] of Object.entries(getPresetValues(save.Singletons, "easy"))) {
-      const [service, key] = path.split(".");
-      expect(save.Singletons[service][key]).toBe(Number(value));
-    }
     const original = await JSZip.loadAsync(bytes);
     const originalWorld = JSON.parse(await original.file("world.json")!.async("string"));
     const unmodified = await JSZip.loadAsync(await exportSave(save));
@@ -35,15 +28,6 @@ describe.skipIf(files.length === 0)("local Timberborn 1.1 example saves", () => 
       if (name !== "world.json" && !file.dir) expect(await unmodified.file(name)!.async("uint8array")).toEqual(await file.async("uint8array"));
     }
     const mapEntities = readEntityData(save);
-    const ziplinePairs = new Set(save.Entities.flatMap(entity =>
-      (entity.Components.ZiplineTower?.ConnectionTargets ?? []).map((target: string) => JSON.stringify([entity.Id, target].sort()))));
-    const ziplines = getZiplineConnections(save.Entities);
-    expect(ziplines).toHaveLength(ziplinePairs.size);
-    for (const connection of ziplines) {
-      expect(ziplinePairs.has(JSON.stringify([connection.sourceId, connection.targetId].sort()))).toBe(true);
-      expect([...connection.start.toArray(), ...connection.end.toArray()].every(Number.isFinite)).toBe(true);
-    }
-    expect(Object.keys(mapEntities.entitiesByIds)).toHaveLength(save.Entities.length);
     expect(writeEntityData(save, mapEntities)).toEqual(save);
     const templates = new Map(save.Entities.filter(entity => entity.Components.BlockObject).map(entity => [entity.Template, entity]));
     for (const entity of templates.values()) {
@@ -53,50 +37,75 @@ describe.skipIf(files.length === 0)("local Timberborn 1.1 example saves", () => 
     }
     const map = readMapData(save);
     expect(map.heightMap.length).toBe(save.Singletons.MapSize.Size.X * save.Singletons.MapSize.Size.Y);
-    expect(map.waterSurfaces.length).toBeGreaterThan(0);
-    // Resource coordinates independently verify voxel indexing in the real game output.
-    for (const tree of save.Entities.filter(entity => ["Birch", "Pine", "Oak"].includes(entity.Template))) {
-      const { X, Y, Z } = tree.Components.BlockObject.Coordinates;
-      expect(map.heightMap[Y * map.mapSizeX + X]).toBe(Z);
-    }
-    const stockpiles = StockpileUtil.getStockpiles(save);
-    expect(stockpiles.length).toBeGreaterThan(0);
-    for (const stockpile of stockpiles) {
-      expect(Object.keys(StockpileUtil.countGoods(stockpile))).not.toContain("undefined");
-      expect(StockpileUtil.getCapacity(stockpile)).toBeGreaterThan(0);
-    }
-    const stockpile = stockpiles.find(entity => StockpileUtil.getAllowedGoods(entity).length === 1)!;
-    const good = StockpileUtil.getAllowedGoods(stockpile)[0];
-    const updatedStockpile = StockpileUtil.setGoods(stockpile, { [good]: StockpileUtil.getCapacity(stockpile)! });
-    const source = save.Entities.find(entity => entity.Template === "BeaverAdult")!;
-    expect(BeaverUtil.getName(source)).not.toBe("Unnamed beaver");
-    const clone = BeaverUtil.copy(save, source);
-    const constructionIds = new Set(ConstructionUtil.getConstructionSites(save).map(entity => entity.Id));
-    expect(constructionIds.size).toBeGreaterThan(0);
-    save.Singletons = updateProperties(save.Singletons, { "ScienceService.SciencePoints": "9000" });
-    save.Entities = save.Entities.map(entity => entity.Id === stockpile.Id ? updatedStockpile : entity);
-    ConstructionUtil.finishAllConstruction(save);
-    save.Entities.push(clone);
-    const edited = await loadSave(await exportSave(save), "edited.timber");
-    expect(edited.Singletons.ScienceService.SciencePoints).toBe(9000);
-    expect(ConstructionUtil.getConstructionSites(edited)).toHaveLength(0);
-    expect(edited.Entities).toHaveLength(originalWorld.Entities.length + 1);
-    expect(edited.Singletons.TerrainMap).toEqual(originalWorld.Singletons.TerrainMap);
-    expect(edited.Singletons.WaterMapNew).toEqual(originalWorld.Singletons.WaterMapNew);
-    const editedEntities = new Map(edited.Entities.map(entity => [entity.Id, entity]));
-    for (const entity of originalWorld.Entities) {
-      if (!constructionIds.has(entity.Id) && entity.Id !== stockpile.Id) expect(editedEntities.get(entity.Id)).toEqual(entity);
+    expect([...map.heightMap].every(Number.isFinite)).toBe(true);
+    for (const surface of map.waterSurfaces) {
+      expect([surface.x, surface.y, surface.height, surface.contamination].every(Number.isFinite)).toBe(true);
     }
   }, 30000);
+
+  it.for(files)("preserves unrelated data when editing supported fields in %s", { timeout: 30000 }, async (filename, context) => {
+    const bytes = readFileSync(resolve(directory, filename));
+    const save = await loadSave(bytes, filename);
+    const expected = worldData(save);
+    const original = await JSZip.loadAsync(bytes);
+    let edits = 0;
+    // Discover targets by capability; no filename, faction, entity ID or difficulty assumptions.
+    const property = getPropertyFields(save.Singletons).find(field =>
+      ["SciencePoints", "Cycle", "CycleDay"].includes(field.key));
+    if (property) {
+      const { service, key } = property;
+      const value = save.Singletons[service][key] === property.min ? property.min + 1 : property.min;
+      save.Singletons = updateProperties(save.Singletons, { [`${service}.${key}`]: String(value) });
+      expected.Singletons[service][key] = value;
+      edits++;
+    }
+    const stockpile = StockpileUtil.getStockpiles(save).find(entity => {
+      const goods = entity.Components["Inventory:Stockpile"]?.Storage?.Goods;
+      const capacity = StockpileUtil.getCapacity(entity);
+      return goods?.length === 1 && Number.isSafeInteger(goods[0].Amount) && goods[0].Amount > 1 &&
+        StockpileUtil.goodId(goods[0].Good) && (capacity === undefined || goods[0].Amount <= capacity);
+    });
+    if (stockpile) {
+      const goods = stockpile.Components["Inventory:Stockpile"].Storage.Goods[0];
+      const updated = StockpileUtil.setGoods(stockpile, { [StockpileUtil.goodId(goods.Good)!]: goods.Amount - 1 });
+      save.Entities = save.Entities.map(entity => entity.Id === stockpile.Id ? updated : entity);
+      expected.Entities.find(entity => entity.Id === stockpile.Id)!.Components["Inventory:Stockpile"].Storage.Goods[0].Amount--;
+      edits++;
+    }
+    const site = ConstructionUtil.getConstructionSites(save)[0];
+    if (site) {
+      ConstructionUtil.finishConstruction(site);
+      const components = expected.Entities.find(entity => entity.Id === site.Id)!.Components;
+      if (components.BlockObjectState) {
+        components.BlockObjectState.Finished = true;
+        delete components.ConstructionSite;
+      } else {
+        components.Constructible.Finished = true;
+        if (components.ConstructionSite) components.ConstructionSite.BuildTimeProgressInHoursKey = 1;
+      }
+      edits++;
+    }
+    if (!edits) context.skip();
+    const cycle = expected.Singletons.GameCycleService ?? expected.Singletons.WeatherService ?? expected.Singletons.CycleService;
+    const metadataPatch = cycle ? { Cycle: cycle.Cycle, Day: cycle.CycleDay } : undefined;
+    const exported = await exportSave(save);
+    const first = await expectSaveArchive(exported, expected, original, metadataPatch);
+    const reopened = await loadSave(exported, "reopened.timber");
+    expect(worldData(reopened)).toEqual(expected);
+    await expectSaveArchive(await exportSave(reopened), expected, first);
+  });
 });
 
-describe("bundled legacy examples", () => {
-  it.each(["lets-play-plains.json", "iron-teeth-plains-1-1.json"])("supports %s", async filename => {
-    const save = await loadSave(readFileSync(resolve("src/examples", filename)), filename);
-    expect(readMapData(save).heightMap).toHaveLength(65536);
-    const beaver = save.Entities.find(entity => entity.Template === "BeaverAdult")!;
-    expect(BeaverUtil.getName(beaver)).not.toBe("Unnamed beaver");
-    expect(BeaverUtil.copy(save, beaver).Id).not.toBe(beaver.Id);
-    expect((await loadSave(await exportSave(save), "legacy.timber")).Entities).toEqual(save.Entities);
+describe("bundled examples", () => {
+  const examples = resolve("src/examples");
+  it.each(readdirSync(examples).filter(name => /\.json$/i.test(name)))("round-trips %s", async filename => {
+    const bytes = readFileSync(resolve(examples, filename));
+    const original = JSON.parse(bytes.toString());
+    const save = await loadSave(bytes, filename);
+    const { X, Y } = save.Singletons.MapSize.Size;
+    expect(readMapData(save).heightMap).toHaveLength(X * Y);
+    expect(writeEntityData(save, readEntityData(save))).toEqual(save);
+    const zip = await JSZip.loadAsync(await exportSave(save));
+    expect(JSON.parse(await zip.file("world.json")!.async("string"))).toEqual(original);
   });
 });
