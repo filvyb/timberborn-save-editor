@@ -11,10 +11,13 @@ import { readMapData } from "../MapData";
 import { getPropertyFields, updateProperties } from "../PropertiesUtil";
 import { StockpileUtil } from "../StockpileUtil";
 import { ConstructionUtil } from "../ConstructionUtil";
+import { getResearchKey, getResearchOptions, getUnlockedResearch, updateResearch } from "../ResearchUtil";
 import { expectSaveArchive, worldData } from "./saveAssertions";
 
 const directory = resolve("saves");
-const files = existsSync(directory) ? readdirSync(directory).filter(name => /\.timber$/i.test(name)) : [];
+const files = existsSync(directory) ? readdirSync(directory, { recursive: true, withFileTypes: true })
+  .filter(entry => entry.isFile() && /\.timber$/i.test(entry.name))
+  .map(entry => resolve(entry.parentPath, entry.name)).sort() : [];
 
 describe.skipIf(files.length === 0)("local save compatibility", () => {
   it.each(files)("round-trips %s without losing archive, world or map entity data", async filename => {
@@ -45,11 +48,23 @@ describe.skipIf(files.length === 0)("local save compatibility", () => {
 
   it.for(files)("preserves unrelated data when editing supported fields in %s", { timeout: 30000 }, async (filename, context) => {
     const bytes = readFileSync(resolve(directory, filename));
-    const save = await loadSave(bytes, filename);
+    let save = await loadSave(bytes, filename);
     const expected = worldData(save);
     const original = await JSZip.loadAsync(bytes);
     let edits = 0;
     // Discover targets by capability; no filename, faction, entity ID or difficulty assumptions.
+    const researchKey = getResearchKey(save);
+    if (researchKey) {
+      const unlocked = getUnlockedResearch(save);
+      const target = unlocked[0] ?? getResearchOptions(save)[0];
+      if (target) {
+        // Lock saved research, or unlock a known entry in a new settlement.
+        const next = unlocked.includes(target) ? unlocked.filter(id => id !== target) : [...unlocked, target];
+        save = updateResearch(save, next);
+        expected.Singletons.BuildingUnlockingService[researchKey] = next;
+        edits++;
+      }
+    }
     const property = getPropertyFields(save.Singletons).find(field =>
       ["SciencePoints", "Cycle", "CycleDay"].includes(field.key));
     if (property) {

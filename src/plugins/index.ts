@@ -4,4 +4,5 @@ export * from "./DownloadPlugin";
 export * from "./MapPluginEntry";
 export * from "./MapSizePlugin";
 export * from "./PropertiesPlugin";
+export * from "./ResearchPlugin";
 export * from "./StockpilePlugin";
